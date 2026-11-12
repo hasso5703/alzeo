@@ -67,6 +67,11 @@ MODEL = served_model()
 # name the 27B lane, whose 71.4 headed Kolibri's and the Nemotron lanes' (found in review, 2026-10-20).
 LANE = {"qwen3.8-27b": "27b", "qwen3.8-flash-next": "flash",
         "qwen3.8-flash-next-fp4": "flash-local", "ornith-1.5-122b": "ornith-122b"}.get(MODEL, "other")
+# The Unsloth GGUF lane's n-gram lookup keeps what every request wrote, for the engine's life (llama.cpp's ngram-mod
+# pool, shared by all requests): a greedy probe run again finds its first answer there, at 273.4 tok/s in code where the
+# first run gave 36.0 (temperature 0, 2026-11-12). Only each probe's first run measures that lane, on an engine started
+# for it; both runs went into the median (code review of v1.48.0, 2026-11-12).
+NGRAM_POOL = MODEL in ("qwen3.8-flash-next-unsloth",)
 HEADERS = {
     # The median is the v1.14 campaign on the official release image (README, CHANGELOG
     # v1.14.0); the per-probe figures are the last ones published, v1.9's, whose median was
@@ -142,6 +147,10 @@ title, reference = HEADERS.get(LANE) or (f"{MODEL or 'unknown model'} benchmark 
 print(title)
 print(f"served model: {MODEL or 'unknown (the engine did not name it)'}")
 print(f"{reference}\n")
+if NGRAM_POOL:
+    print("its n-gram lookup keeps every answer: a probe's second run finds its first one there and runs several times\n"
+          "  faster, so only each probe's first run counts, and only on an engine started for this run (another\n"
+          "  bench.sh on the same engine finds this one's answers)\n")
 # pid, share of a core, name and command line, tab-separated, from cpu-hogs.py
 HOGS = [line.split("\t") for line in os.environ.get("HOGS", "").splitlines() if line.count("\t") == 3]
 if os.environ.get("HOGS_FAILED", "0") != "0":
@@ -161,13 +170,15 @@ all_greedy = []
 untimed = 0
 for name, temp, prompt, mt in PROBES:
     speeds = [stream(prompt, temp, mt) for _ in range(2)]
+    timed = speeds[:1] if NGRAM_POOL else speeds
     if temp == 0.0 and "worst-case" not in name:
         # -1 is a run the stream could not time (no token, or one): not a speed, and it went
         # into the median as one, dragging it down (found in review, 2026-09-24)
-        all_greedy += [x for x in speeds if x > 0]
-        untimed += sum(1 for x in speeds if x <= 0)
-    print(f"  {name}: {' / '.join(f'{x:.1f}' if x > 0 else 'not timed' for x in speeds)} tok/s")
-    if max(speeds) > 90:
+        all_greedy += [x for x in timed if x > 0]
+        untimed += sum(1 for x in timed if x <= 0)
+    print(f"  {name}: {' / '.join(f'{x:.1f}' if x > 0 else 'not timed' for x in speeds)} tok/s"
+          + (" (the second one not counted)" if NGRAM_POOL else ""))
+    if max(timed) > 90:
         print("    ^ above the block-8 speculative physical ceiling for this box (~9x the")
         print("      ~11 tok/s AR floor), almost certainly a measurement artifact, not")
         print("      real speed. Cross-check with bench-matrix.sh (wall-clock method).")

@@ -661,10 +661,12 @@ b12282's image the n-grams slowed the draft down (46.9 / 43.9 / 22.9 / 116.2 tok
 gave 63.2 tok/s in all (34.2 each) against 54.2 for one (llama.cpp b12291 built on the box, the DFlash2 draft alone),
 each with a window of its own, so that neither can make the other fail; one window shared by four gave 72.9, and the
 installer has it as an option, with its risk: requests that together pass the window all end with an error. The whole
-window is read: three codes of three found in a prompt of 255,529 tokens; 524,288 tokens with YaRN is an option. These
-are measures of minutes run back to back, the box's hottest zone at 88 to 95.5 °C: no continuous load was measured.
-TODO(measure): the lane's GSM8K and HumanEval. Every number and the settings measured:
-**[docs/flash-unsloth-lane.md](docs/flash-unsloth-lane.md)**.
+window is read: three codes of three found in a prompt of 255,529 tokens; with YaRN, 524,288 tokens is an option, and
+1,048,576 for one request at a time (the KV cache in q8_0: three codes of three in 985,296 tokens). GSM8K 98.4 % (250
+questions) and HumanEval 99.4 % (164 problems) at the `medium` effort and temperature 0, and 20 tool calls right out of
+20 (llama.cpp b12291 built on the box, the DFlash2 draft alone); MMLU not measured. These are measures of minutes run
+back to back, the box's hottest zone at 88 to 95.5 °C: no continuous load was measured. Every number and the settings
+measured: **[docs/flash-unsloth-lane.md](docs/flash-unsloth-lane.md)**.
 
 ## Speech: Qwen3-ASR and Kokoro, on the CPU, beside any lane
 

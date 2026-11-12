@@ -188,6 +188,13 @@ in reasoning, as fast in prose, 2.4 times as fast in a rewrite of code. The draf
 that start was one of the slow ones (261 s), and so were its first answers (34.2 tok/s in code, then 40.4 and 42.3,
 where b12282's image gave 52.5 to 56.6). TODO(measure): the draft alone on b12316's image after a quick start.
 
+## Quality
+
+Measured on 2026-11-12 with llama.cpp b12291 built on the box, the lane's files and its DFlash2 draft without the
+n-gram lookup, eight requests at once of 20,480 tokens each, at the `medium` effort and temperature 0: GSM8K 98.4 %
+(250 questions, 299 tokens an answer), HumanEval 99.4 % (164 problems, pass@1, 621 tokens an answer), and 20 tool calls
+right out of 20. MMLU was not measured.
+
 ## The chat template
 
 The GGUF carries Qwen's template with Unsloth's changes: it merges the system and developer messages that open a
@@ -259,8 +266,19 @@ since a second window of 262,144 tokens already takes 8.7 GiB more of the GPU's 
 measured. The KV cache in FP8 is refused for this model ("FP8 cache is not supported for architecture 'qwen4exp'"); the
 installer takes llama.cpp's own f16 or q8_0. In q8_0 (2026-11-12, one request) the three codes were found at 250,000
 tokens too, the prompt computed at 659.8 tok/s against 676.0 in f16 (2.4 % less), with 31 GiB available at ready
-against 27; f16 stays the lane's, since no evaluation of the answers ran in q8_0. TODO(measure): a window of 1,048,576
-tokens (YaRN at four times), and opencode and Claude Code sessions through the proxy (`prefix_probe.py`).
+against 27; f16 stays the lane's, since no evaluation of the answers ran in q8_0.
+
+One request at a time can have a window of 1,048,576 tokens, YaRN at four times and the KV cache in q8_0
+(`FLASH_UNSLOTH_CTX=1048576`, `FLASH_UNSLOTH_YARN=4`, `FLASH_UNSLOTH_KV=q8_0` and `FLASH_UNSLOTH_SLOTS=1` in the
+installer). Measured on 2026-11-12 (b12291 built on the box, the DFlash2 draft alone): ready in 51 s, 100,881 MiB of
+the GPU's, 16 GiB available at ready and 12 after the probes; three codes of three found in a prompt of 985,296
+tokens, computed at 440.2 tok/s (2,240 s; the box's hottest zone read 89 °C at the end), and the next turn back from the
+cache with 23 tokens computed again; short texts at temperature 0 at 58.2 / 62.1 / 31.4 / 51.6 tok/s, where the KV
+cache in q8_0 without YaRN gave 61.0 / 62.8 / 31.5 / 54.0. Through the proxy a prompt there may have 964,689 tokens
+(92 % of the window: past a window of 262,144 the flash ceiling of 250,000 is lifted, as on the FP4-Local lane at its
+1M). opencode names the entry for that window but keeps the lane's limits for 262,144 tokens (a context of 205,000).
+The quality of the answers under YaRN at four times and the KV cache in q8_0 was not measured. TODO(measure): opencode
+and Claude Code sessions through the proxy (`prefix_probe.py`).
 
 ## What it does not have
 

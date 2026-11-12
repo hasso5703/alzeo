@@ -261,9 +261,9 @@ def ceiling_from_env(text: str, served=None, window: int = 0) -> int:
                     values[key] = 0
     ceiling = values.get("PROMPT_CEILING_TOKENS", 0)
     flash = values.get("FLASH_PROMPT_CEILING_TOKENS", 0)
-    # the FP4-Local lane at its 1M window (FLASH_LOCAL_CONTEXT=1m, v1.45.2) gets no flash ceiling, as the proxy decides
-    # (wide_fp4_local): its engine's window says so
-    wide = served == "qwen3.8-flash-next-fp4" and window > 262144
+    # the FP4-Local lane at its 1M window (FLASH_LOCAL_CONTEXT=1m, v1.45.2), and the Unsloth GGUF lane past its 262,144
+    # (its YaRN, 2026-11-12), get no flash ceiling, as the proxy decides (wide_flash): their engine's window says so
+    wide = served in ("qwen3.8-flash-next-fp4", "qwen3.8-flash-next-unsloth") and window > 262144
     if flash > 0 and (not served or served in FLASH_SERVED_NAMES) and not wide:
         ceiling = flash if ceiling <= 0 else min(ceiling, flash)
     return ceiling

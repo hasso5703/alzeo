@@ -47,11 +47,16 @@ Percpu:            20000 kB
 """
 
 
+# the llama.cpp lane's container, as docker inspect gives its id, and the cgroup its processes run in
+LANE_ID = "ab" * 32
+
+
 class Box:
-    """A fake /proc with six processes: 101 an SGLang scheduler, 102 SGLang's launcher
+    """A fake /proc with eight processes: 101 an SGLang scheduler, 102 SGLang's launcher
     (a python3 whose command line names sglang), 103 somebody's own training script, 104
     vLLM's engine core (the Kolibri lane), 105 vLLM's API server, 106 somebody's own script
-    in a directory named vllm."""
+    in a directory named vllm, 107 somebody's own llama-server, 108 the llama.cpp lane's
+    llama-server in its container; and a fake docker, which knows no container until told."""
 
     def __init__(self):
         self.t = pathlib.Path(tempfile.mkdtemp(prefix="preflight-"))
@@ -61,11 +66,16 @@ class Box:
                                ("103", "python3", "python3\0train.py"),
                                ("104", "VLLM::EngineCor", "VLLM::EngineCore"),
                                ("105", "python3", "/usr/bin/python3\0/usr/local/bin/vllm\0serve\0Aleph-Alpha/Kolibri-1"),
-                               ("106", "python3", "python3\0/home/u/vllm/benchmarks/bench.py")):
+                               ("106", "python3", "python3\0/home/u/vllm/benchmarks/bench.py"),
+                               ("107", "llama-server", "/home/u/llama.cpp/build/bin/llama-server\0-m\0x.gguf"),
+                               ("108", "llama-server", "/app/llama-server\0-m\0/root/.cache/huggingface/x.gguf")):
             (self.proc / pid).mkdir(parents=True)
             (self.proc / pid / "comm").write_text(comm + "\n")
             (self.proc / pid / "cmdline").write_text(cmd + "\0")
+        (self.proc / "107" / "cgroup").write_text("0::/user.slice/user-1000.slice/session-2.scope\n")
+        (self.proc / "108" / "cgroup").write_text(f"0::/system.slice/docker-{LANE_ID}.scope\n")
         self.meminfo(0)
+        self.docker("exit 1")
 
     def meminfo(self, orphan_gib):
         """The fake meminfo, with orphan_gib more GiB that no kernel category accounts for."""
@@ -76,11 +86,17 @@ class Box:
         (self.t / "smi").write_text("#!/bin/sh\n" + body + "\n")
         (self.t / "smi").chmod(0o755)
 
+    def docker(self, body):
+        """The docker the guard asks the llama.cpp lane's container id of: never the box's own."""
+        (self.t / "docker").write_text("#!/bin/sh\n" + body + "\n")
+        (self.t / "docker").chmod(0o755)
+
     def run(self, wait_s=2, smi_timeout_s=10, extra=None):
         env = {"PATH": "/usr/bin:/bin", "QWEN38_PREFLIGHT_MEMINFO": str(self.t / "meminfo"),
                "QWEN38_PREFLIGHT_SMI": str(self.t / "smi"), "QWEN38_PREFLIGHT_PROC": str(self.proc),
                "QWEN38_PREFLIGHT_WAIT_S": str(wait_s), "QWEN38_PREFLIGHT_STEP_S": "1",
-               "QWEN38_PREFLIGHT_SMI_TIMEOUT_S": str(smi_timeout_s), **(extra or {})}
+               "QWEN38_PREFLIGHT_SMI_TIMEOUT_S": str(smi_timeout_s),
+               "QWEN38_PREFLIGHT_DOCKER": str(self.t / "docker"), **(extra or {})}
         t0 = time.monotonic()
         r = subprocess.run(["bash", str(GUARD), "qwen38-test.service"], capture_output=True, text=True,
                            env=env, timeout=120)
@@ -130,6 +146,30 @@ class WhatBlocksAStart(unittest.TestCase):
                 rc, out, _ = self.box.run()
                 self.assertEqual(rc, 1, out)
                 self.assertIn(named, out)
+
+    def test_another_programs_llama_server_never_blocks_a_start(self):
+        """A llama-server is the llama.cpp lane's engine only in that lane's container: told by
+        its name alone, the user's own llama-server on the GPU held every lane's start back
+        (code review of v1.48.0, 2026-11-12)."""
+        self.box.docker(f'[ "$4" = qwen38-flash-unsloth ] && echo {LANE_ID}')
+        self.box.smi('echo "107, llama-server, 30000"')
+        rc, out, _ = self.box.run()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("other programs hold GPU memory: 107 llama-server 30000 MiB", out)
+
+    def test_what_is_left_of_the_llamacpp_lanes_engine_is_a_remnant(self):
+        self.box.docker(f'[ "$4" = qwen38-flash-unsloth ] && echo {LANE_ID}')
+        self.box.smi('printf "108, llama-server, 30000\\n107, llama-server, 20000\\n"')
+        rc, out, _ = self.box.run()
+        self.assertEqual(rc, 1, out)
+        reason = out.split("NOT starting", 1)[1]
+        self.assertIn("108 llama-server 30000 MiB", reason)
+        self.assertNotIn("107 llama-server", reason)
+        # and with no such container, a llama-server is nobody's remnant
+        self.box.docker("exit 1")
+        self.box.smi('echo "108, llama-server, 30000"')
+        rc, out, _ = self.box.run()
+        self.assertEqual(rc, 0, out)
 
     def test_another_programs_gpu_memory_never_blocks_a_start(self):
         """Somebody's own GPU work is no remnant: the lane starts and the journal names it."""
@@ -219,12 +259,15 @@ class WhereItRuns(unittest.TestCase):
         wait = int(re.search(r'WAIT_S="\$\{QWEN38_PREFLIGHT_WAIT_S:-(\d+)\}"', guard).group(1))
         step = int(re.search(r'STEP_S="\$\{QWEN38_PREFLIGHT_STEP_S:-(\d+)\}"', guard).group(1))
         smi = int(re.search(r'SMI_TIMEOUT_S="\$\{QWEN38_PREFLIGHT_SMI_TIMEOUT_S:-(\d+)\}"', guard).group(1))
+        docker = int(re.search(r'DOCKER_TIMEOUT_S="\$\{QWEN38_PREFLIGHT_DOCKER_TIMEOUT_S:-(\d+)\}"', guard).group(1))
         self.assertIn('timeout -k 2 "$SMI_TIMEOUT_S"', guard)
+        self.assertIn('timeout -k 2 "$DOCKER_TIMEOUT_S"', guard)
         for tpl in UNITS:
             text = (REPO / tpl).read_text()
             m = re.search(r"^TimeoutStartSec=(\d+)", text, re.M)
             budget = int(m.group(1)) if m else 90
-            self.assertLess(wait + step + smi + 2 + 5, budget, tpl)
+            # the docker call asking the llama.cpp lane's container id, once a pass (2026-11-12)
+            self.assertLess(wait + step + smi + 2 + docker + 2 + 5, budget, tpl)
 
     def test_every_installer_that_writes_such_a_unit_puts_it_in_place(self):
         """Run on its own, install-image.sh or install-video.sh would leave a unit naming a

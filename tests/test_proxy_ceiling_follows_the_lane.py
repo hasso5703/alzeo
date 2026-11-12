@@ -146,6 +146,10 @@ class TheFitToolAndTheCockpitAgree(unittest.TestCase):
         self.assertEqual(fit.ceiling_from_env(env, "qwen3.8-flash-next-fp4", 1048576), 0)
         self.assertEqual(fit.ceiling_from_env(env, "qwen3.8-flash-next-fp4", 262144), 250000)
         self.assertEqual(fit.ceiling_from_env(env, "qwen3.8-flash-next", 1048576), 250000)
+        # the Unsloth GGUF lane past its 262,144 by YaRN, one request at a time (2026-11-12): the proxy lifts the flash
+        # ceiling there too (wide_flash), and the cockpit read 250,000 where the proxy relayed 964,689
+        self.assertEqual(fit.ceiling_from_env(env, "qwen3.8-flash-next-unsloth", 1048576), 0)
+        self.assertEqual(fit.ceiling_from_env(env, "qwen3.8-flash-next-unsloth", 262144), 250000)
 
     def test_the_cockpit_asks_the_fit_tool(self):
         cockpit = (REPO / "dashboard/cockpit.py").read_text()

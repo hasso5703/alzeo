@@ -63,15 +63,17 @@ Ten roles, nothing else:
 v6.55: the Qwen3.8 Flash-Next Unsloth GGUF lane (v1.48), served by llama.cpp's llama-server, which names itself
 "llamacpp" on /v1/models. Like vLLM it has none of SGLang's info, load or abort routes, and it stops a request whose
 connection closes, streamed or not (its server-context.cpp and server-queue.cpp, b12291): closing is its abort there too
-(CLOSE_ABORTS). Its window and its pool are the context its /v1/models row says (meta.n_ctx), its names one more flash
-model's (the flash ceiling holds), and System One says which lanes it serves on, as on vLLM. A reasoning effort of
-"none" goes as it came: llama-server turns it into enable_thinking false itself (server-common.cpp). The pair reads its
-unit's command as it reads the others': its name by --alias, its checkpoint by the snapshot its -m names, its requests
-at once by -np (names_in, revision_in, slots_in).
+(CLOSE_ABORTS). Its window is the context of a slot, which its /v1/models row says (meta.n_ctx), and its pool the
+windows of all its slots (/props total_slots); a prompt is counted by its own routes (its chat count route, its
+/tokenize's content, /v1/messages/count_tokens); its names are one more flash model's (the flash ceiling holds, but
+past a window of 262,144, as on the FP4-Local lane: wide_flash), and System One says which lanes it serves on, as on
+vLLM. A reasoning effort of "none" becomes enable_thinking false, as on the other Qwen lanes (qwen_effort_none). The
+pair reads its unit's command as it reads the others': its name by --alias, its checkpoint by the snapshot its -m
+names, its requests at once by -np (names_in, revision_in, slots_in).
 
 v6.54: the Qwen3.8 Flash-Next FP4-Local lane at its 1M window (FLASH_LOCAL_CONTEXT=1m, v1.45.2) has no flash ceiling:
 its engine's window, read on /v1/models with the names it serves (served_window), says so, and its prompts are bounded
-by the pool's share (wide_fp4_local).
+by the pool's share (wide_flash).
 
 v6.53: an SSE answer's end is read as its engine sends it, whatever its client's pace (v1.44.0, decisions 1106 to
 1109). The thread that reads the engine never waits for the one that writes the client: the answer waits in a spool
@@ -804,6 +806,9 @@ FLASH_SERVED_NAMES = frozenset({"qwen3.8-flash-next", "qwen3.8-flash-next-fp4", 
 # build, with the flash lane's chat template. Named one by one: a lane vLLM serves under another
 # name (Kolibri, the Nemotron lanes) has a template of its own, and its bodies go as they came.
 QWEN_VLLM_NAMES = frozenset({"qwen3.8-flash-next-fp4"})
+# The Qwen lanes llama.cpp serves (v6.55): the Unsloth GGUF lane, whose template is the GGUF's with the Qwen lanes' fixes
+# (patch-template.py --gguf), named one by one as above.
+QWEN_LLAMACPP_NAMES = frozenset({"qwen3.8-flash-next-unsloth"})
 # The engines that stop a request whose connection closes, and have none of SGLang's abort routes (v6.55): vLLM
 # (measured 2026-10-14) and llama.cpp's llama-server, whose wait for an answer, streamed or not, ends with its HTTP
 # client and cancels its task (read in its server-context.cpp and server-queue.cpp, b12291, 2026-11-12). Closing is
@@ -863,19 +868,25 @@ def lane_ceiling():
             served = set(served_models())
         except EngineUnreachable:
             served = set()
-        if not served or (served & FLASH_SERVED_NAMES and not wide_fp4_local(served)):
+        if not served or (served & FLASH_SERVED_NAMES and not wide_flash(served)):
             ceiling = FLASH_PROMPT_CEILING_TOKENS if ceiling <= 0 else min(ceiling, FLASH_PROMPT_CEILING_TOKENS)
     return ceiling
 
 
-def wide_fp4_local(served):
-    """True when what serves is the FP4-Local lane at its 1M window (FLASH_LOCAL_CONTEXT=1m, v1.45.2), which its
-    engine says on /v1/models with the names just read (max_model_len past the native 262,144, served_window), as the
-    cockpit and oc-fit-limits.py read it: measured to 1,036,576 tokens with 15.1 GiB of memory left (2026-11-09), its
-    prompts are bounded by the pool's share, not by the flash ceiling, which kept a long prefill of the SGLang flash
-    lane off the memory edge. The flash ceiling refused every prompt past 250,000 at that window (code review of
-    v1.45.2)."""
-    if not served & QWEN_VLLM_NAMES or served & (FLASH_SERVED_NAMES - QWEN_VLLM_NAMES):
+# The flash lanes that serve past the model's own window by YaRN: the FP4-Local lane (FLASH_LOCAL_CONTEXT=1m, v1.45.2)
+# and the Unsloth GGUF lane (its installer's CTX and YARN, 2026-11-12).
+WIDE_FLASH_NAMES = QWEN_VLLM_NAMES | frozenset({"qwen3.8-flash-next-unsloth"})
+
+
+def wide_flash(served):
+    """True when what serves is one of those lanes at a window past the native 262,144, which its engine says on
+    /v1/models with the names just read (served_window: vLLM's max_model_len, llama.cpp's meta.n_ctx), as the cockpit
+    reads it (and oc-fit-limits.py, the FP4-Local lane's). Measured, the FP4-Local lane to 1,036,576 tokens with 15.1
+    GiB of memory left (2026-11-09), the Unsloth GGUF lane to 985,296 with 12 GiB left (one request, YaRN at four
+    times, its KV cache in q8_0, 2026-11-12): their prompts are bounded by the pool's share, not by the flash ceiling,
+    which kept a long prefill of the SGLang flash lane off the memory edge. The flash ceiling refused every prompt past
+    250,000 at that window (code review of v1.45.2; the Unsloth GGUF lane's, code review of v1.48.0)."""
+    if not served & WIDE_FLASH_NAMES or served & (FLASH_SERVED_NAMES - WIDE_FLASH_NAMES):
         return False
     return (_SERVED.get("window") or 0) > 262144
 
@@ -1491,13 +1502,16 @@ def qwen_effort_none(body, path):
     variant, omp's minimal), so a client left on kolibri-1 broke on the next Qwen lane (found
     in review, 2026-10-14). Kolibri's template takes "none": on vLLM, and on any doubt, the
     body goes as it came, but for the Qwen lanes vLLM serves (QWEN_VLLM_NAMES, v6.43), whose
-    template is the flash lane's."""
+    template is the flash lane's, and those llama.cpp serves (QWEN_LLAMACPP_NAMES, v6.55):
+    llama-server turns a top-level "none" into enable_thinking false itself, but hands one in
+    chat_template_kwargs to the template, which refused it (server-common.cpp, b12291; code
+    review of v1.48.0, 2026-11-12), and opencode's Kolibri entry sends it there."""
     if not body or not path.split("?", 1)[0] == "/v1/chat/completions":
         return body, False
     if b'"none"' not in body or b'"reasoning_effort"' not in body:
         return body, False
-    if _SERVED["engine"] != "sglang" and not (_SERVED["engine"] == "vllm"
-                                             and set(_SERVED["names"] or ()) & QWEN_VLLM_NAMES):
+    qwen = {"vllm": QWEN_VLLM_NAMES, "llamacpp": QWEN_LLAMACPP_NAMES}.get(_SERVED["engine"], frozenset())
+    if _SERVED["engine"] != "sglang" and not set(_SERVED["names"] or ()) & qwen:
         return body, False
     try:
         j = json.loads(body)
@@ -2233,7 +2247,8 @@ def warmup_hold(est, pool):
 def tokenize_count(body, path):
     """Exact prompt length from the engine's own count: /v1/messages/count_tokens for
     the Anthropic dialect (see _anthropic_for_count), /tokenize for the others (chat
-    template applied to messages and tools), media priced from their headers on both.
+    template applied to messages and tools; on llama.cpp, its own chat count route, or
+    its /tokenize's content for a prompt), media priced from their headers on both.
     None when nothing exact is possible for THIS body (malformed, unknown shape,
     rejected by the engine with a 4xx): the caller then judges it by its size
     (NOCOUNT_CHARS_PER_TOKEN). Raises
@@ -2267,6 +2282,18 @@ def tokenize_count(body, path):
             req["prompt"] = j["text"]
         else:
             return None
+        if _SERVED["engine"] == "llamacpp" and route == "/tokenize":
+            # v6.55: llama-server's /tokenize reads "content" alone and answers {"tokens": [...]}: asked with messages
+            # or a prompt it answered an empty list, so no body was counted on that lane and its size decided, a token
+            # a byte past 241,172 bytes (code review of v1.48.0, 2026-11-12). A chat body has its own count route there,
+            # which applies the chat template and tokenizes as a generation does (handle_count_tokens,
+            # server-context.cpp, b12291 and b12316); a prompt is its /tokenize content, with the special tokens a
+            # completion adds.
+            if "messages" in req:
+                route, field = "/v1/chat/completions/input_tokens", "input_tokens"
+            else:
+                route, field = "/tokenize", "tokens"
+                req = {"content": req["prompt"], "add_special": True}
         payload = rewritten(req)
         key = _api_key()
     except Exception:
@@ -2287,7 +2314,9 @@ def tokenize_count(body, path):
     except Exception:
         return None
     try:
-        n = int(json.loads(raw.decode()).get(field, -1))
+        got = json.loads(raw.decode()).get(field, -1)
+        # llama-server's /tokenize gives the tokens themselves, the others their count
+        n = len(got) if field == "tokens" and isinstance(got, list) else int(got)
     except Exception:
         return None
     return n + media[0] if n >= 0 else None
@@ -2436,10 +2465,23 @@ def _vllm_facts(key, timeout):
         note_engine(names, owner)
         _SERVED.update(names=names, engine=owner, window=served_window(rows), ts=time.time())
     if rows and owner == "llamacpp":
-        # v6.55: llama.cpp publishes no KV cache gauge; a request's pool is the context of its slot, which /v1/models
-        # says: the whole KV cache with one slot or with the slots sharing it (-kvu), a slot's own share without -kvu
+        # v6.55: llama.cpp publishes no KV cache gauge. Its window is one request's, the context of a slot, which
+        # /v1/models says (meta.n_ctx) and past which the engine refuses a prompt itself ("exceeds the available
+        # context size", server-context.cpp, b12291 and b12316): no prompt wedges it. Its pool is what it holds for
+        # all its requests, the windows of its slots (/props total_slots), as SGLang's pool is the cache its requests
+        # share. Read as one slot's window, a prompt got 92 % of that window (241,172 of 262,144), under the flash
+        # ceiling the other flash lanes keep, and a wedge looked possible where none is: every body past 241,172 bytes
+        # was then judged by its bytes (code review of v1.48.0, 2026-11-12). Slots that share one window (-kvu) say
+        # nothing else on /props, so their pool reads as large; the engine still refuses past its window. No /props,
+        # one slot.
         w = served_window(rows)
-        return w, w
+        try:
+            req = urllib.request.Request(UPSTREAM + "/props", headers={"Authorization": f"Bearer {key}"})
+            slots = json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode()).get("total_slots")
+        except Exception:
+            slots = None
+        slots = slots if isinstance(slots, int) and not isinstance(slots, bool) and 0 < slots <= 4096 else 1
+        return w * slots, w
     return vllm_pool_facts(text, models)
 
 

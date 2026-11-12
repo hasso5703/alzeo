@@ -19,12 +19,14 @@ lookup and ggml-org's GGUF of the DFlash2 draft, as a lane of its own beside the
   each text's first pass, the weights copied into the GPU's memory from a USB SSD); 27.9, 27.7, 27.3 and 27.4 without
   either, on the image measured before it (b12282).
 - **63.2 tok/s** in all with two requests at once, each with a window of its own of 262,144 tokens, against 54.2 for one.
-- The whole window read: three codes of three found in a prompt of 255,529 tokens; 524,288 tokens with YaRN as an option.
+- The whole window read: three codes of three found in a prompt of 255,529 tokens; with YaRN, 524,288 tokens as an
+  option, and 1,048,576 for one request at a time (three codes of three in 985,296 tokens).
+- GSM8K **98.4 %** (250 questions) and HumanEval **99.4 %** (164 problems) at the medium effort and temperature 0, and
+  20 tool calls right out of 20 (llama.cpp b12291 built on the box, the DFlash2 draft alone); MMLU not measured.
 - **95.3 GiB** of the GPU's memory at ready with its two windows and its draft, **20 GiB** left to the box.
 - Ready in 35 to 50 s with its files on the internal disk, 50 to 281 s from a USB SSD.
 - 117 GB on disk: 112 for its GGUF files and their draft, 4.5 for the image.
 - Measures of minutes, run back to back: no continuous load was measured.
-- TODO(measure): GSM8K, HumanEval.
 
 ## What it is good at
 

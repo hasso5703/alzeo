@@ -251,7 +251,10 @@ class TheStagedUnit(unittest.TestCase):
                               r"--rope-scale 2\s")
         # FP8 is refused for this model's architecture ("FP8 cache is not supported for architecture 'qwen4exp'",
         # 2026-11-12): the render refuses it before the engine does
-        for var, bad in (("YARN", "1"), ("LOAD", "fast"), ("CTX", "1m"), ("SLOTS", "0"), ("KV", "f8_e4m3"), ("SHARED", "2")):
+        # and a number with a leading zero, which bash's arithmetic reads as octal: 08 failed on its way, 00 rendered
+        # -np 00, 0262144 rendered -c 182472 (code review of v1.48.0, 2026-11-12)
+        for var, bad in (("YARN", "1"), ("LOAD", "fast"), ("CTX", "1m"), ("SLOTS", "0"), ("KV", "f8_e4m3"), ("SHARED", "2"),
+                         ("SLOTS", "08"), ("SLOTS", "00"), ("CTX", "0262144"), ("YARN", "02")):
             with self.subTest(var=var, value=bad):
                 rc, out, _ = self.staged_with(**{var: bad})
                 self.assertNotEqual(rc, 0)
@@ -316,10 +319,12 @@ class ThePatcherReadsAGguf(unittest.TestCase):
 
 class Hub(http.server.ThreadingHTTPServer):
     """A Hub of a few files, at /<repo>/resolve/<rev>/<path>: ranges answered 206, every request written down with
-    its headers; `redirect` sends a file's request to another server, as the Hub sends it to its CDN."""
+    its headers; `redirect` sends a file's request to another server, as the Hub sends it to its CDN; `moved`, an old
+    prefix and its new one, answers 307 to the new one on this host, as the Hub does for a renamed repository; `token`,
+    the Authorization every other request must carry, as a gated file asks it."""
 
-    def __init__(self, files, redirect=None):
-        self.files, self.redirect, self.seen = files, redirect, []
+    def __init__(self, files, redirect=None, moved=None, token=None):
+        self.files, self.redirect, self.moved, self.token, self.seen = files, redirect, moved, token, []
 
         class H(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -327,6 +332,15 @@ class Hub(http.server.ThreadingHTTPServer):
 
             def do_GET(h):
                 h.server.seen.append((h.path, dict(h.headers)))
+                if h.server.moved and h.path.startswith(h.server.moved[0]):
+                    h.send_response(307)
+                    h.send_header("Location", h.server.moved[1] + h.path[len(h.server.moved[0]):])
+                    h.end_headers()
+                    return
+                if h.server.token and h.headers.get("Authorization") != h.server.token:
+                    h.send_response(401)
+                    h.end_headers()
+                    return
                 rel = h.path.split("/resolve/", 1)[-1].split("/", 1)[-1]
                 if h.server.redirect:
                     h.send_response(302)
@@ -373,8 +387,8 @@ class TheFetch(unittest.TestCase):
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         shutil.rmtree(self.t, ignore_errors=True)
 
-    def hub(self, files=None, redirect=None):
-        h = Hub(self.data if files is None else files, redirect)
+    def hub(self, files=None, redirect=None, moved=None, token=None):
+        h = Hub(self.data if files is None else files, redirect, moved, token)
         self.hubs.append(h)
         return h
 
@@ -433,6 +447,20 @@ class TheFetch(unittest.TestCase):
         os.environ["HF_TOKEN"] = "hf_secretvalue"
         self.run_fetch()
         self.assertTrue(hub.seen and all(h.get("Authorization") == "Bearer hf_secretvalue" for _, h in hub.seen))
+        self.assertTrue(cdn.seen and all("Authorization" not in h for _, h in cdn.seen), cdn.seen)
+
+    def test_the_token_follows_the_hubs_own_redirect_and_never_the_cdns(self):
+        """A repository renamed on the Hub answers 307 to its new name on the same host, where a gated file asks the
+        token: the token goes on with that redirect, and never with the next one, to the CDN. urllib dropped it on
+        both, and the file was refused for want of a token that was set (code review of v1.48.0, 2026-11-12)."""
+        cdn = self.hub()
+        hub = self.hub(files={}, redirect=cdn.url, moved=("/org/model/", "/new-org/model/"),
+                       token="Bearer hf_secretvalue")
+        os.environ["HF_ENDPOINT"] = hub.url
+        os.environ["HF_TOKEN"] = "hf_secretvalue"
+        self.run_fetch()
+        moved = [h for path, h in hub.seen if path.startswith("/new-org/model/")]
+        self.assertTrue(moved and all(h.get("Authorization") == "Bearer hf_secretvalue" for h in moved), hub.seen)
         self.assertTrue(cdn.seen and all("Authorization" not in h for _, h in cdn.seen), cdn.seen)
 
     def test_offline_with_a_file_missing_says_so_and_fetches_nothing(self):

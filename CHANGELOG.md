@@ -29,20 +29,27 @@ not taken. The whole window is read: three codes of three found in a prompt of 2
 tokens with YaRN is an option, a few lines of the installer for one request at a time (three codes of three at 500,000
 tokens), not the default until its effect on short texts is measured; the KV cache in FP8 is refused for this model,
 and the installer takes f16 or q8_0 (q8_0 read the window whole too, its prompt computed 2.4 % slower, with 4 GiB more
-left to the box, and no evaluation of the answers ran in it). These are measures of minutes run back to back, during
-which the box's hottest zone peaked at 88 to 95.5 °C: no continuous load was measured. TODO(measure): several requests
-at once with the table on the USB SSD, a window of 1,048,576 tokens, GSM8K and HumanEval, the eight clients, the prefix
-cache through the proxy, the memory at a long prompt's peak, the same under the unit's `--memory 110g`. Every number and
-the settings measured: `docs/flash-unsloth-lane.md`.
+left to the box, and no evaluation of the answers ran in it). One request at a time can have a window of 1,048,576
+tokens, YaRN at four times and the KV cache in q8_0: three codes of three found in 985,296 tokens, 12 GiB left to the
+box after; the quality of its answers there is not measured. GSM8K 98.4 % (250 questions) and HumanEval 99.4 % (164
+problems) at the `medium` effort and temperature 0, and 20 tool calls right out of 20 (b12291 built on the box, the
+DFlash2 draft alone); MMLU not measured. These are measures of minutes run back to back, during which the box's hottest
+zone peaked at 88 to 95.5 °C: no continuous load was measured. TODO(measure): several requests at once with the table
+on the USB SSD, the eight clients, the prefix cache through the proxy, the memory at a long prompt's peak, the same
+under the unit's `--memory 110g`. Every number and the settings measured: `docs/flash-unsloth-lane.md`.
 
 **Its files, pinned one by one.** The repository holds every quantization of the model: the lane takes the four parts
 of one folder and the draft, each by its sha256 and its size (`PATH=SHA256:SIZE`, read from the Hub's LFS pointers and
 the reference box's cache), and fetches them with `gguf-fetch.py`, Python's standard library on the host, since the
 image has no Python: into the cache's own layout, so a file `huggingface_hub` fetched is not fetched again, resumed,
 checked against its sha256 before it takes its name, refused before the first byte without the room, under
-`huggingface_hub`'s own lock of the blob, the token sent to the Hub alone. The unit checks the files it names before the
-engine starts (`llamacpp-files.sh`, exit 78 with the reason on the lane's card), and `check-pins.sh` asks every file's
-LFS pointer and the image, on the GitHub Container Registry with its own anonymous token, every day.
+`huggingface_hub`'s own lock of the blob, the token sent to the Hub alone, on its own redirects too (a renamed
+repository) and never to its CDN. The unit checks the files it names before the engine starts (`llamacpp-files.sh`,
+exit 78 with the reason on the lane's card), and `check-pins.sh` asks every file's LFS pointer and the image, on the
+GitHub Container Registry with its own anonymous token, every day. Every engine unit's preflight waits for the memory of
+what is left of this lane's llama-server, the one in its own container: another program's llama-server on the GPU is
+another program's, and never holds a lane's start back. `bench.sh` counts each probe's first run alone on this lane,
+whose n-gram lookup finds a run's answer again at the next one.
 
 **Its chat template.** The GGUF carries Qwen's template with Unsloth's changes, which still refused a system message
 past the opening ones (opencode and Claude Code send them) and raised on a Claude Code ToolSearch result, and defaulted
@@ -61,9 +68,15 @@ its name (llama.cpp has neither route; closing the connection stops a generation
 System One points at the SGLang lanes, as the proxy does. Its mark is Unsloth's.
 
 **Proxy v6.55.** llama.cpp's engine is told by its `owned_by` (`llamacpp`): a client that leaves closes the upstream, the
-window is read from `/v1/models` (`meta.n_ctx`), System One is refused there with the lanes that answer it, and the
-flash model's one-prompt ceiling applies to its name as to the two other flash lanes'. The pair reads a llama.cpp unit's
-name, checkpoint and slots from its command (`--alias`, the snapshot of its `-m`, `-np`), as it reads a vLLM unit's.
+window is read from `/v1/models` (`meta.n_ctx`, one request's) and the pool is its slots' windows together (`/props`
+`total_slots`), so no prompt is taken for a wedge where the engine refuses past its window itself. A prompt is counted
+by the engine's own routes, a chat body by `/v1/chat/completions/input_tokens` and a prompt by `/tokenize`'s `content`
+(llama-server's `/tokenize` reads nothing else). The flash model's one-prompt ceiling applies to its name as to the two
+other flash lanes', and lifts past a window of 262,144 as at the FP4-Local lane's 1M (the cockpit reads it the same). A
+reasoning effort of `none` in `chat_template_kwargs`, which llama-server hands to the template and the template
+refuses, becomes `enable_thinking` false as on the other Qwen lanes. System One is refused there with the lanes that
+answer it. The pair reads a llama.cpp unit's name, checkpoint and slots from its command (`--alias`, the snapshot of its
+`-m`, `-np`), as it reads a vLLM unit's.
 
 ## v1.47.0 (2026-11-12): a GPU clock cap in the cockpit's Machine view: about the same tokens per second for fewer watts and degrees
 

@@ -10,6 +10,7 @@ field. A fake engine here names itself and checks what the script does with it.
 import http.server
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -166,6 +167,21 @@ def main():
                 fails.append(f"{model} printed another lane's line: {other!r}")
         if model not in out.splitlines()[0]:
             fails.append(f"{model} is not named in the header: {out.splitlines()[0]!r}")
+        if "the second one not counted" in out:
+            fails.append(f"{model} left its second runs out of the median")
+    # The Unsloth GGUF lane's n-gram lookup keeps every answer: a probe's second run finds its first one, at 273.4
+    # tok/s where the first gave 36.0, and both went into the median (code review of v1.48.0, 2026-11-12). It has no
+    # reference of its own yet, and its first runs alone count.
+    out = run_bench("qwen3.8-flash-next-unsloth")
+    if "qwen3.8-flash-next-unsloth" not in out.splitlines()[0]:
+        fails.append(f"the Unsloth GGUF lane is not named in the header: {out.splitlines()[0]!r}")
+    for other in ("Qwen3.8-27B NVFP4+DFlash2", REF_27B, "NVFP4+NEXTN", "FP4-Local"):
+        if other in out:
+            fails.append(f"the Unsloth GGUF lane printed another lane's line: {other!r}")
+    probes = [ln for ln in out.splitlines() if re.match(r"^  \S.*\): .* tok/s", ln)]
+    if ("only each probe's first run counts" not in out or len(probes) != 4
+            or not all(ln.endswith("tok/s (the second one not counted)") for ln in probes)):
+        fails.append(f"the Unsloth GGUF lane's second runs were not left out of its median:\n{out[:900]}")
 
     # An engine that does not answer /v1/models, or answers it with no name, must not stop
     # the benchmark. Only the second was simulated (a 200 with an empty id), so the path

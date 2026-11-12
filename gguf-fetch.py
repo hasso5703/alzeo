@@ -110,6 +110,25 @@ def url_of(repo, rev, path):
     return f"{endpoint}/{repo}/resolve/{rev}/{urllib.parse.quote(path)}"
 
 
+class _TokenOnTheSameHost(urllib.request.HTTPRedirectHandler):
+    """The token goes on with a redirect that stays on the host it was sent to (a repository renamed, a Location of
+    the Hub's own), never to another host (the CDN the Hub sends a file to). urllib drops a header added with
+    add_unredirected_header on every redirect, the Hub's own included, and a gated file moved on the Hub was then
+    refused for want of a token that was set (code review of v1.48.0, 2026-11-12)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        token = req.unredirected_hdrs.get("Authorization")
+        if new is not None and token:
+            was, now = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(new.full_url)
+            if (was.scheme, was.hostname, was.port) == (now.scheme, now.hostname, now.port):
+                new.add_unredirected_header("Authorization", token)
+        return new
+
+
+OPENER = urllib.request.build_opener(_TokenOnTheSameHost)
+
+
 def download(url, part, size, timeout):
     """The bytes of url into part, from where part ends: a server that answers the range whole (200)
     starts it over, one that says it is past the end (416) leaves it as it is."""
@@ -122,12 +141,12 @@ def download(url, part, size, timeout):
     req = urllib.request.Request(url, headers={"User-Agent": "alzeo-gguf-fetch"})
     token = os.environ.get("HF_TOKEN", "").strip()
     if token:
-        # not passed on to the CDN the Hub redirects to (urllib's redirect copies the other headers)
+        # not passed on to the CDN the Hub redirects to, kept on the Hub's own redirects (_TokenOnTheSameHost)
         req.add_unredirected_header("Authorization", f"Bearer {token}")
     if have:
         req.add_header("Range", f"bytes={have}-")
     try:
-        resp = urllib.request.urlopen(req, timeout=timeout)
+        resp = OPENER.open(req, timeout=timeout)
     except urllib.error.HTTPError as e:
         if e.code == 416 and have:
             return

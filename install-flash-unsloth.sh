@@ -150,8 +150,11 @@ FLASH_UNSLOTH_SHARED="0"
 # three were found at 250,000 and at 500,000 tokens (variantes-20261112-0429-contexte-b12291), one request alone, 19 GiB
 # available at ready, an option until its effect on short texts is measured. With SHARED at 0, -c holds CTX for each
 # request: set SLOTS to 1 with it, or SHARED to 1. A second window of 262,144 tokens took 8.7 GiB more of the GPU's
-# memory (88,693 MiB with one, 97,552 with two, b12291), and two of 524,288 were not measured. TODO(measure): 1,048,576
-# (YARN 4, KV q8_0).
+# memory (88,693 MiB with one, 97,552 with two, b12291), and two of 524,288 were not measured. One request at a time
+# has 1,048,576 with YARN 4 and KV q8_0 (CTX 1048576, SLOTS 1; variantes-20261112-1001-contexte-1m-b12291): three codes
+# of three found in 985,296 tokens, computed at 440.2 tok/s, 16 GiB available at ready and 12 after, short texts at
+# 58.2 / 62.1 / 31.4 / 51.6 tok/s where q8_0 without YaRN gave 61.0 / 62.8 / 31.5 / 54.0; the answers' quality under
+# YaRN at four times and q8_0 not measured.
 FLASH_UNSLOTH_CTX="262144"
 FLASH_UNSLOTH_YARN=""
 # The KV cache's type (-ctk and -ctv), llama.cpp's own f16 when empty, or q8_0: FP8 is refused for this architecture
@@ -197,10 +200,12 @@ fi
 # the four parts, the draft and the chat template, each where the unit names it.
 render_unit(){
   local slots="-np $FLASH_UNSLOTH_SLOTS" ctx="$FLASH_UNSLOTH_CTX" kv="" yarn="" files="" f in_box="/root/.cache/huggingface"
-  case "$FLASH_UNSLOTH_SLOTS" in ''|*[!0-9]*|0) die "FLASH_UNSLOTH_SLOTS must be a number of requests, got: $FLASH_UNSLOTH_SLOTS" ;; esac
-  case "$FLASH_UNSLOTH_CTX" in ''|*[!0-9]*) die "FLASH_UNSLOTH_CTX must be a number of tokens, got: $FLASH_UNSLOTH_CTX" ;; esac
+  # Numbers written with no leading zero: bash's arithmetic reads one as octal, and 08 failed ("value too great for
+  # base") where 0262144 rendered -c 182472 with no word said (code review of v1.48.0, 2026-11-12).
+  case "$FLASH_UNSLOTH_SLOTS" in ''|*[!0-9]*|0*) die "FLASH_UNSLOTH_SLOTS must be a number of requests, from 1, with no leading zero, got: $FLASH_UNSLOTH_SLOTS" ;; esac
+  case "$FLASH_UNSLOTH_CTX" in ''|*[!0-9]*|0*) die "FLASH_UNSLOTH_CTX must be a number of tokens, with no leading zero, got: $FLASH_UNSLOTH_CTX" ;; esac
   case "$FLASH_UNSLOTH_LOAD" in mmap|auto|none|dio) ;; *) die "FLASH_UNSLOTH_LOAD must be mmap, auto, none or dio, got: $FLASH_UNSLOTH_LOAD" ;; esac
-  case "$FLASH_UNSLOTH_YARN" in '') ;; *[!0-9]*|0|1) die "FLASH_UNSLOTH_YARN must be empty or YaRN's factor, 2 or more, got: $FLASH_UNSLOTH_YARN" ;; esac
+  case "$FLASH_UNSLOTH_YARN" in '') ;; *[!0-9]*|0*|1) die "FLASH_UNSLOTH_YARN must be empty or YaRN's factor, 2 or more, with no leading zero, got: $FLASH_UNSLOTH_YARN" ;; esac
   case "$FLASH_UNSLOTH_KV" in ''|f16|q8_0) ;; *) die "FLASH_UNSLOTH_KV must be empty, f16 or q8_0 (FP8 is refused for this model), got: $FLASH_UNSLOTH_KV" ;; esac
   case "$FLASH_UNSLOTH_SHARED" in 0|1) ;; *) die "FLASH_UNSLOTH_SHARED must be 1 (one window the requests share) or 0 (a window each), got: $FLASH_UNSLOTH_SHARED" ;; esac
   # one window they share (-kvu), or a window each, -c holding them all

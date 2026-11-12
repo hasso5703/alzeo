@@ -1106,7 +1106,9 @@ class TheProxyAgreesWithItselfAboutItsVersion(unittest.TestCase):
 
     def versions(self):
         import re
-        doc = re.search(r"in front of SGLang(?: or vLLM)? \(v(\d+\.\d+)\)", self.src)
+        # the engines it stands in front of, as the docstring names them: SGLang, then vLLM (v6.37), then llama.cpp
+        # (v6.55, the Unsloth GGUF lane)
+        doc = re.search(r"in front of SGLang(?: or vLLM|, vLLM or llama\.cpp)? \(v(\d+\.\d+)\)", self.src)
         # "on {BIND}:{port}" since v6.21, "on :{port}" before it: the version is what this
         # asserts, not the shape of the line it sits in.
         banner = re.search(r"log\(f\"v(\d+\.\d+) on ", self.src)

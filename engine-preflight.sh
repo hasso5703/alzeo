@@ -8,8 +8,9 @@
 # logged NV_ERR_NO_MEMORY and its lock seized, and the whole machine froze until a power
 # cycle, 9.5 h later. Waiting longer does not help there; not starting does. So this waits,
 # bounded, and refuses a start only when that is what it finds:
-#   - GPU memory still held by what is left of an engine: an SGLang or a vLLM process, a llama.cpp
-#     lane's llama-server, or a process the driver still lists and the system no longer has;
+#   - GPU memory still held by what is left of an engine: an SGLang or a vLLM process, the llama.cpp
+#     lane's llama-server (in its own container), or a process the driver still lists and the system
+#     no longer has;
 #   - memory the driver keeps that no process accounts for: on this unified-memory machine
 #     a GPU allocation is in none of the kernel's own categories, so MemTotal minus all of
 #     them is what the driver holds (1.1 GiB with no engine and a desktop session, the
@@ -18,7 +19,8 @@
 # Anything else never blocks a start, another program's GPU memory included (the journal
 # names it): the engine sizes its pool to what it finds, as it always did.
 #
-# One attempt waits at most 60 s, plus one nvidia-smi call of at most 12 s: systemd kills
+# One attempt waits at most 60 s, plus one nvidia-smi call of at most 12 s and, when the driver
+# lists a llama-server, one docker call of at most 7 s: systemd kills
 # a start step after TimeoutStartSec, 90 s on every engine unit, and the waiting goes on
 # across attempts, since each unit starts again 15 s after a failed one. The lines it
 # writes start with "preflight:", and the cockpit reads them to say why a lane is not up.
@@ -34,12 +36,34 @@ SMI="${QWEN38_PREFLIGHT_SMI:-nvidia-smi}"
 PROC="${QWEN38_PREFLIGHT_PROC:-/proc}"
 STEP_S="${QWEN38_PREFLIGHT_STEP_S:-2}"
 SMI_TIMEOUT_S="${QWEN38_PREFLIGHT_SMI_TIMEOUT_S:-10}"
+# The llama.cpp lane's container, and the docker that says its id (2026-11-12)
+LLAMACPP_CONTAINER="${QWEN38_PREFLIGHT_LLAMACPP_CONTAINER:-qwen38-flash-unsloth}"
+DOCKER="${QWEN38_PREFLIGHT_DOCKER:-docker}"
+DOCKER_TIMEOUT_S="${QWEN38_PREFLIGHT_DOCKER_TIMEOUT_S:-5}"
+
+# True when the process $1 runs in the llama.cpp lane's container, whose id its cgroup names. Told
+# by its name alone, a llama-server of another program on the GPU (one of the user's own) held every
+# lane's start back after 60 s (code review of v1.48.0, 2026-11-12). The id is asked once a pass,
+# and only when the driver lists a llama-server (gpu_holders keeps it in llamacpp_id); a docker that
+# does not answer says none is ours. No process of this lane outlives the container docker knows:
+# docker drops a container (--rm, rm -f) only once its exit event says its main process, llama-server,
+# was reaped, and refuses to while that process still runs, and the kernel kills the other processes of
+# a PID namespace when its first one exits, reaping that one only after them (moby daemon/kill.go,
+# delete.go and monitor.go at docker 29.6.2, the box's, read 2026-11-12).
+ours_llamacpp() {
+  if [ "$llamacpp_id" = "?" ]; then
+    llamacpp_id="$(timeout -k 2 "$DOCKER_TIMEOUT_S" "$DOCKER" inspect -f '{{.Id}}' "$LLAMACPP_CONTAINER" 2>/dev/null)" \
+      || llamacpp_id=""
+    case "$llamacpp_id" in *[!0-9a-f]*) llamacpp_id="" ;; esac
+  fi
+  [ -n "$llamacpp_id" ] && grep -qF -- "$llamacpp_id" "$PROC/$1/cgroup" 2>/dev/null
+}
 
 # One line, its fields split on the unit separator (read does not merge two of them when
 # one is empty, as it does tabs): MiB held by engine remnants, MiB held in all, the
 # remnants, the others. Returns 1 when the driver does not answer.
 gpu_holders() {
-  local out line pid name mib comm cmd eng=0 all=0 rem="" oth=""
+  local out line pid name mib comm cmd eng=0 all=0 rem="" oth="" llamacpp_id="?"
   out="$(timeout -k 2 "$SMI_TIMEOUT_S" "$SMI" --query-compute-apps=pid,process_name,used_memory \
            --format=csv,noheader,nounits 2>/dev/null)" || return 1
   while IFS= read -r line; do
@@ -53,11 +77,12 @@ gpu_holders() {
     comm="$(cat "$PROC/$pid/comm" 2>/dev/null)"
     cmd="$(tr '\0' ' ' < "$PROC/$pid/cmdline" 2>/dev/null)"
     # SGLang's lanes, and the Kolibri lane's vLLM: its engine core is VLLM::EngineCore (the
-    # kernel keeps 15 characters of it) and its API server a python3 running vllm serve. And a
-    # llama.cpp lane's llama-server (the speech lane's is built for the CPU, and the driver lists
-    # no process of it).
+    # kernel keeps 15 characters of it) and its API server a python3 running vllm serve. And the
+    # llama.cpp lane's llama-server, in that lane's container (the speech lane's is built for the CPU,
+    # and the driver lists no process of it).
     if [ ! -d "$PROC/$pid" ] || [[ "$comm" == sglang* ]] || [[ "$cmd" == *sglang* ]] \
-       || [[ "$comm" == VLLM::* ]] || [[ "$cmd" == *vllm\ serve* ]] || [[ "$comm" == llama-server ]]; then
+       || [[ "$comm" == VLLM::* ]] || [[ "$cmd" == *vllm\ serve* ]] \
+       || { [[ "$comm" == llama-server ]] && ours_llamacpp "$pid"; }; then
       eng=$((eng + mib)); rem+="$pid ${comm:-gone} $mib MiB; "
     else
       oth+="$pid ${comm:-$name} $mib MiB; "
