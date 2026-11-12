@@ -561,6 +561,18 @@ jobs:
           [ $(( C + O )) -le "$LOW" ] || { echo "flash-local 1m: $C + $O passes $LOW, its pool less 10 %"; exit 1; }
           [ $(( C - 20000 + 43863 + O )) -le 1048576 ] || { echo "flash-local 1m: past its 1,048,576 window"; exit 1; }
           ! l flash-local nonsense 2>/dev/null || { echo "an unknown flash-local mode must be refused"; exit 1; }
+          # The Qwen3.8 Flash-Next Unsloth GGUF lane, at its native window for each of its two requests and at its 1M
+          # for one request (FLASH_UNSLOTH_CONTEXT=1m, decisions 1316 and 1318, 2026-11-12), by the same rule: a
+          # llama.cpp pool at one request is its window, held whole by its -c, and the pair fits it less 10 %, and the
+          # window the prompt at opencode's compaction point, one agent step and the answer.
+          [ "$(l flash-unsloth)" = "205000 32000 local, 262K" ] || { echo "flash-unsloth's default drifted"; exit 1; }
+          [ "$(l flash-unsloth native)" = "205000 32000 local, 262K" ] || { echo "flash-unsloth native drifted"; exit 1; }
+          [ "$(l flash-unsloth 1m)" = "830000 32000 local, 1M" ] || { echo "flash-unsloth 1m drifted"; exit 1; }
+          read -r C O _ <<<"$(l flash-unsloth 1m)"
+          LOW=$(( 1048576 * 92 / 100 * 90 / 100 ))
+          [ $(( C + O )) -le "$LOW" ] || { echo "flash-unsloth 1m: $C + $O passes $LOW, its pool less 10 %"; exit 1; }
+          [ $(( C - 20000 + 43863 + O )) -le 1048576 ] || { echo "flash-unsloth 1m: past its 1,048,576 window"; exit 1; }
+          ! l flash-unsloth nonsense 2>/dev/null || { echo "an unknown flash-unsloth mode must be refused"; exit 1; }
           # Nonsense is refused rather than defaulted, or a typo silently serves
           # the wrong budget.
           ! l banana native 2>/dev/null || { echo "an unknown target must be refused"; exit 1; }

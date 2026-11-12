@@ -117,11 +117,14 @@ The unit runs it as every lane runs its engine (`qwen38-flash-unsloth.service.te
 - `--jinja --chat-template-file`: the GGUF's chat template with the fixes below, mounted read-only.
 - `--load-mode none --lazy-mode on`: the weights copied into the GPU's memory, the table read from the disk, above.
 - `-c 524288 -np 2`: two requests at once, each with the window the model was trained for (`qwen4exp.context_length`
-  in the GGUF), 262,144 tokens, below.
+  in the GGUF), 262,144 tokens, its KV cache in llama.cpp's own f16, below. `FLASH_UNSLOTH_CONTEXT=1m` renders `-c
+  1048576 -np 1 -ctk q8_0 -ctv q8_0 --rope-scaling yarn --yarn-orig-ctx 262144 --rope-scale 4` instead: one request at
+  a time, with 1,048,576 tokens, below.
 - `-md`, `--spec-type ngram-mod,draft-dflash --spec-draft-n-max 7 --spec-draft-p-min 0.5 --spec-draft-sampling
   probabilistic`: the n-gram lookup and the draft, below.
 - Each of these is one variable of the installer (`FLASH_UNSLOTH_LOAD`, `_SLOTS`, `_SHARED`, `_CTX`, `_YARN`, `_KV`,
-  `_SPEC`), with its measure beside it, and its rendering refuses a value the engine would not take.
+  `_SPEC`), with its measure beside it, and its rendering refuses a value the engine would not take, and a window the
+  requests share (below).
 - `--alias qwen3.8-flash-next-unsloth`: the name it serves under (`llama-server` has no `--served-model-name`).
 - `--metrics --no-ui --api-key-file /out/api-key --host 127.0.0.1 --port 30000`: its Prometheus counters on, its web
   interface off, the box's key from the file mounted read-only (in no command line), asked on every route but `/health`
@@ -193,7 +196,8 @@ where b12282's image gave 52.5 to 56.6). TODO(measure): the draft alone on b1231
 Measured on 2026-11-12 with llama.cpp b12291 built on the box, the lane's files and its DFlash2 draft without the
 n-gram lookup, eight requests at once of 20,480 tokens each, at the `medium` effort and temperature 0: GSM8K 98.4 %
 (250 questions, 299 tokens an answer), HumanEval 99.4 % (164 problems, pass@1, 621 tokens an answer), and 20 tool calls
-right out of 20. MMLU was not measured.
+right out of 20. MMLU was not measured. These ran without YaRN and with the KV cache in f16, as the lane serves by
+default. TODO(measure): GSM8K and HumanEval in its 1M mode (YaRN at four times, the KV cache in q8_0).
 
 ## The chat template
 
@@ -209,42 +213,61 @@ the `lean` level, its default (`LEAN.md`). Its four levels are offered to openco
 ## Several requests at once
 
 Two requests at once, each with a window of its own of 262,144 tokens (`-c 524288 -np 2`, `FLASH_UNSLOTH_SLOTS=2` and
-`FLASH_UNSLOTH_SHARED=0` in the installer): llama-server decodes the tokens of both in one batch at each step (its
-`update_slots`), a third request waits until one of them ends (the cockpit shows the requests waiting, read off its
-`/metrics`), and no request can make the other fail. Measured on 2026-11-12 (b12291 built on the box, the weights on the
-internal disk, the DFlash2 draft alone), beside the other form, one window the requests share (`-kvu`, a unified KV
-cache):
+`FLASH_UNSLOTH_SHARED=0` in the installer; Hasan's decision 1318, 2026-11-12): llama-server decodes the tokens of both
+in one batch at each step (its `update_slots`), a third request waits until one of them ends (the cockpit shows the
+requests waiting, read off its `/metrics`), and no request can make the other fail. A request of 262,144 tokens or
+more is refused at once ("exceeds the available context size"). Measured on 2026-11-12 before 12:23 (b12291 built on
+the box, the weights on the internal disk, the DFlash2 draft alone, the KV cache in f16 unless the line says q8_0):
 
 | | one request | two at once, in all (each) | four at once, in all (each) | eight at once, in all (each) | MemAvailable at ready, after the probes |
 |---|---|---|---|---|---|
 | **`-c 524288 -np 2`, the lane's** | **54.2 tok/s** | **63.2 (34.2)** | **66.9 (36.8), two of them waiting** | | **20 GiB, 14** |
 | `-c 1048576 -np 4`, the KV cache in q8_0 | 53.0 tok/s | | 68.9 (18.2) | | 14 GiB, 10 |
 | `-c 262144 -np 1` | 53.4 tok/s | | 56.2 (queued, one at a time) | | 28 GiB, 22 |
-| `-c 262144 -np 4 -kvu`, one window | 53.9 tok/s | | 72.9 (19.7) | 66.8 (18.7) | 25 GiB, 18 |
-| `-c 262144 -np 8 -kvu`, one window | 54.5 tok/s | | 72.6 (19.1) | 69.2 (9.2) | 21 GiB, 14 |
-| `-c 262144 -np 4 -kvu`, no draft | | | 58.8 (15.2) | | 30 GiB, 29 |
+| `-c 262144 -np 4 -kvu`, one window shared: refused, below | 53.9 tok/s | | 72.9 (19.7) | 66.8 (18.7) | 25 GiB, 18 |
+| `-c 262144 -np 8 -kvu`, the same | 54.5 tok/s | | 72.6 (19.1) | 69.2 (9.2) | 21 GiB, 14 |
 
-No request failed and the engine stopped on no assertion. With the lane's two windows, an agent's conversation of five
-turns came back from the cache with 61 to 77 tokens computed again per turn after the first, and two conversations
-taking turns with 19 and 20, each keeping its window's cache. Four windows in q8_0 left 10 GiB available after the
-probes: too thin a margin for this box, and not the lane's.
+With the lane's two windows, an agent's conversation of five turns came back from the cache with 61 to 77 tokens
+computed again per turn after the first, two conversations taking turns with 19 and 20, each keeping its window's
+cache, and the box kept 14.2 GiB at the lowest (its telemetry). Four windows in q8_0
+left 10 GiB available after the probes: too thin a margin for this box. On the pinned image b12316 the two windows in
+q8_0 took four salvoes of 4 and 8 requests and none stopped (63.2 to 65.3 tok/s in all, under the GPU clock cap of
+2,200 MHz set from the cockpit at 12:23 that day), two conversations taking turns came back with 19 and 20 tokens
+computed again, and the box kept 24 GiB at ready and 16.1 at the lowest (variantes-20261112-1501-kvu-image-image-b12316).
 
-One window shared by four requests gives 9 % more in all at four (72.9 tok/s against 66.9), and the installer has it
-(`FLASH_UNSLOTH_SHARED=1`, `FLASH_UNSLOTH_SLOTS=4`), with its risk, as llama.cpp's `server-context.cpp` (b12316) has
-it: a request may take the whole window, and when the window is full the server first lets go of the tokens an idle
-request kept for its next turn, one request at a time (they stay in host memory when they fit its prompt cache,
-`--cache-ram`, 8 GiB by default), then retries with smaller batches; when even one token does not fit, every request in
-progress ends with "Context size has been exceeded." and is let go. So two agents whose conversations together pass
-262,144 tokens end each other's turns: an opencode session near its limit of 205,000 tokens leaves about 57,000 to the
-others. In both forms, a request of 262,144 tokens or more is refused at once ("exceeds the available context size").
+### One window shared by several requests: refused for now
+
+It was meant to serve more requests at once on more context: up to four requests sharing one window (`-kvu`) of
+524,288 or 1,048,576 tokens by YaRN (Hasan's decisions 1313 to 1317, 2026-11-12). Each time requests shared a window
+under load, llama-server stopped itself, four loads of four that day, with b12291 built on the box and with the pinned
+image b12316: "common/common.cpp:1634: failed to remove sequence N with p0=..., p1=-1", an abort in
+`common_memory::seq_rm` called from `post_decode`, after 4 minutes of GSM8K at 8 requests, at a salvo of 8 requests,
+after 106 s of GSM8K, and on the image after a first salvo of 8 had passed. It is llama.cpp's open issue
+[31656](https://github.com/ggml-org/llama.cpp/issues/31656): a draft's rejected tokens are rolled back from this hybrid
+model's per-token recurrent snapshots (`llama_memory_recurrent::seq_rm`), which a sequence loses when `find_slot` moves
+its cell between the parts of a batch, and a shared window splits a batch out of the sequences' order
+(`llama_memory_hybrid_idx::init_batch`); whatever became of idle conversations, it stopped. What was measured before
+it stopped, all under the GPU clock cap of 2,200 MHz (the memory does not depend on it):
+
+| one window shared by four requests | available at ready, at the lowest | one request | four at once, in all | how it ended |
+|---|---|---|---|---|
+| 524,288 by YaRN at twice, the KV cache in q8_0, `--cache-ram 4096` | 22.2 GiB, 15.8 | 53.2 tok/s | 72.6 | stopped at a salvo of 8 requests, and after 106 s of GSM8K |
+| the same, idle conversations kept in the window (`--no-cache-idle-slots --cache-ram 1024`) | 20.1 GiB, 16.9 | 47.2 tok/s | 68.1 | stopped after 4 minutes of GSM8K |
+| the same as the first, on the image b12316 | 22.2 GiB, 16.8 | | 49.2 at eight | stopped after that salvo |
+| 1,048,576 by YaRN at four times, the KV cache in q8_0 | 5 to 11 GiB, then under 6 | | | the study's memory guard |
+| the same, `--cache-ram 1024` | 11.2 GiB, 8.3 | 38.1 tok/s | 59.5 | short probes only |
+
+The installer refuses `FLASH_UNSLOTH_SHARED=1` and says why. The form comes back when llama.cpp fixes the rollback
+(its pull request 31669 reworks it), measured again then.
 
 ## Memory
 
 At ready, with its two windows, the lane holds 97,552 MiB of the GPU's (95.3 GiB) and the box keeps 20 GiB available,
-14 after the probes of the table above (b12291, 2026-11-12); with one window, 88,693 MiB (86.6 GiB) and 28 to 29 GiB.
-The windows' KV cache is allocated at the start: a prompt does not grow it. TODO(measure): the peak of a long prompt and
-of two requests at once, the margin at that peak, and llama.cpp's prompt cache in host memory (`--cache-ram`, 8 GiB by
-default).
+14.2 at the lowest under the probes of the table above (b12291, 2026-11-12); with one window, 88,693 MiB (86.6 GiB) and
+28 to 29 GiB; in its 1M mode, 100,881 MiB, 16.1 GiB at ready and 12.9 at the lowest, at the end of a prompt of 985,296
+tokens. The windows' KV cache is allocated at the start: a prompt does not grow it. TODO(measure): the peak of a long
+prompt and of two requests at once, the margin at that peak, and llama.cpp's prompt cache in host memory
+(`--cache-ram`, 8 GiB by default).
 
 ## A long prompt, the window, and an agent's next turn
 
@@ -261,24 +284,45 @@ context (524288) exceeds the training context of the model (262144) - capping").
 (`FLASH_UNSLOTH_CTX=524288` and `FLASH_UNSLOTH_YARN=2` in the installer, one line each), three codes of three were found at
 250,000 tokens and at 500,000 (the 513,367-token prompt computed at 584.6 tok/s, in 879 s), with 19 GiB available at
 ready: an option, not the lane's, until its effect on short texts is measured. That was one request alone: `-c` holds a
-window for each request, so with it set `FLASH_UNSLOTH_SLOTS=1`, or `FLASH_UNSLOTH_SHARED=1` for one window shared,
-since a second window of 262,144 tokens already takes 8.7 GiB more of the GPU's memory and two of 524,288 were not
-measured. The KV cache in FP8 is refused for this model ("FP8 cache is not supported for architecture 'qwen4exp'"); the
-installer takes llama.cpp's own f16 or q8_0. In q8_0 (2026-11-12, one request) the three codes were found at 250,000
-tokens too, the prompt computed at 659.8 tok/s against 676.0 in f16 (2.4 % less), with 31 GiB available at ready
-against 27; f16 stays the lane's, since no evaluation of the answers ran in q8_0.
+window for each request, so with it set `FLASH_UNSLOTH_SLOTS=1`, since a second window of 262,144 tokens already takes
+8.7 GiB more of the GPU's memory and two of 524,288 were not measured. The KV cache in FP8 is refused for this model
+("FP8 cache is not supported for architecture 'qwen4exp'"); the installer takes llama.cpp's own f16 or q8_0. In q8_0
+(2026-11-12, one request) the three codes were found at 250,000 tokens too, the prompt computed at 659.8 tok/s against
+676.0 in f16 (2.4 % less), with 31 GiB available at ready against 27; f16 stays the lane's, since no evaluation of the
+answers ran in q8_0.
 
-One request at a time can have a window of 1,048,576 tokens, YaRN at four times and the KV cache in q8_0
-(`FLASH_UNSLOTH_CTX=1048576`, `FLASH_UNSLOTH_YARN=4`, `FLASH_UNSLOTH_KV=q8_0` and `FLASH_UNSLOTH_SLOTS=1` in the
-installer). Measured on 2026-11-12 (b12291 built on the box, the DFlash2 draft alone): ready in 51 s, 100,881 MiB of
-the GPU's, 16 GiB available at ready and 12 after the probes; three codes of three found in a prompt of 985,296
-tokens, computed at 440.2 tok/s (2,240 s; the box's hottest zone read 89 °C at the end), and the next turn back from the
-cache with 23 tokens computed again; short texts at temperature 0 at 58.2 / 62.1 / 31.4 / 51.6 tok/s, where the KV
-cache in q8_0 without YaRN gave 61.0 / 62.8 / 31.5 / 54.0. Through the proxy a prompt there may have 964,689 tokens
-(92 % of the window: past a window of 262,144 the flash ceiling of 250,000 is lifted, as on the FP4-Local lane at its
-1M). opencode names the entry for that window but keeps the lane's limits for 262,144 tokens (a context of 205,000).
-The quality of the answers under YaRN at four times and the KV cache in q8_0 was not measured. TODO(measure): opencode
-and Claude Code sessions through the proxy (`prefix_probe.py`).
+At its native window the proxy keeps the flash model's ceiling of 250,000 tokens a prompt, and the Load gives opencode,
+pi and `claude-local` the flash lane's limits, a context of 205,000 tokens and 32,000 for the answer. TODO(measure):
+opencode and Claude Code sessions through the proxy (`prefix_probe.py`).
+
+## A window of 1,048,576 tokens for one request: FLASH_UNSLOTH_CONTEXT=1m
+
+One request at a time with a window of 1,048,576 tokens, YaRN at four times and the KV cache in q8_0, `-c 1048576 -np
+1`: the mode chosen beside the default on 2026-11-12 (decisions 1316 and 1318), as `FLASH_LOCAL_CONTEXT=1m` is the
+FP4-Local lane's. Measured that day before 12:23, with no clock cap (b12291 built on the box, the DFlash2 draft alone):
+
+| | measured |
+|---|---|
+| ready in | 51 s, 100,881 MiB of the GPU's |
+| three codes hidden in a prompt of 985,296 tokens | 3 of 3 found, the prompt computed at 440.2 tok/s (2,240 s; the box's hottest zone read 89 °C at the end), the next turn back from the cache with 23 tokens computed again |
+| memory available | 16.1 GiB at ready, 13.9 through the long prompt, 12.9 at the lowest, at its end |
+| short texts at temperature 0 (code, reasoning, prose, a rewrite) | 58.2 / 62.1 / 31.4 / 51.6 tok/s, where one request at 262,144 in q8_0 gave 61.0 / 62.8 / 31.5 / 54.0 |
+
+```bash
+cd ~/dgx-spark-qwen38 && FLASH_UNSLOTH_CONTEXT=1m ./install-flash-unsloth.sh --units-only     # then Load the lane
+cd ~/dgx-spark-qwen38 && FLASH_UNSLOTH_CONTEXT=native ./install-flash-unsloth.sh --units-only  # back to 262,144 each
+```
+
+`--units-only` writes the choice and the lane's unit, and downloads and starts nothing: the next Load of the lane, from
+the cockpit or `./switch-model.sh flash-unsloth`, starts it with the window chosen and sets the clients' limits for it.
+The choice is kept for the Loads after (a Load from the cockpit stages the unit with none of your environment), in
+`~/.config/qwen38/flash-unsloth-context`, which `--uninstall` removes. An update keeps the window chosen:
+`./install.sh` does not read `FLASH_UNSLOTH_CONTEXT`, and says so.
+
+At 1M the proxy relays a prompt up to 92 % of the window (964,689 tokens), and the Load gives opencode, pi and
+`claude-local` a context of 830,000 tokens and 32,000 for the answer (the FP4-Local lane's rule at its 1M: the window
+less 10 % holds both), and the cockpit's Lanes and Now views say 1M tokens of context. A second request waits until
+the first ends. TODO(measure): the quality of the answers under YaRN at four times.
 
 ## What it does not have
 

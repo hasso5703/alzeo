@@ -17,6 +17,12 @@
 #                                              sudo, its chat template made first: switch-model.sh
 #                                              flash-unsloth installs FILE
 #
+# THE WINDOW is 262,144 tokens, the model's own, for each of two requests at once: FLASH_UNSLOTH_CONTEXT=1m gives one
+# request at a time a window of 1,048,576 (YaRN at four times) instead, and the choice holds for every run after, a
+# Load from the cockpit included (FLASH_UNSLOTH_CONTEXT=native brings the default back), as FLASH_LOCAL_CONTEXT
+# does for the FP4-Local lane. A window shared by several requests (-kvu) is refused for now: FLASH_UNSLOTH_SHARED says
+# why.
+#
 # install.sh puts this lane's unit in on every plain install, like the other lanes, and its first Load from the
 # cockpit pulls its image and fetches its files; ./install.sh --no-flash-unsloth leaves it out of the run that passes
 # it. It takes 112 GB of GGUF files (the model's four parts, 111.3 GB, and the draft, 0.7) and an image of 4.5 GB
@@ -131,39 +137,55 @@ FLASH_UNSLOTH_SPEC="ngram-mod,draft-dflash"
 # at ready in all four. The pinned image serves in none: from the USB SSD it was ready in 261 s, then 50 s for the start
 # after it on the same files (variantes-20261112-0840-choisi-tiede-image-b12316).
 FLASH_UNSLOTH_LOAD="none"
-# The requests served at once (-np), each with a window of its own (SHARED below). Measured on 2026-11-12 with b12291
-# built on the box, the weights on the internal disk and the DFlash2 head alone, 262,144 tokens of window a request:
-# two windows (-c 524288 -np 2, variantes-20261112-0850-flux-places-b12291) 54.2 tok/s for one request, 63.2 in all
-# with two (34.2 each), 66.9 with four (two served, two waiting), 20 GiB available at ready and 14 after the probes; four
-# windows in q8_0 (-c 1048576 -np 4, the same set) 53.0, 68.9 with four (18.2 each), 14 GiB at ready and 10 after, too
-# thin a margin for the box. One window shared (variantes-20261112-0415-flux-b12291): -np 1 53.4, 56.2 with four;
-# -np 4 -kvu 53.9, 72.9 with four (19.7 each), 66.8 with eight, 25 GiB at ready and 18 after; -np 8 -kvu 54.5, 72.6
-# with four, 69.2 with eight, 21 and 14 GiB; -np 4 -kvu without the draft 58.8 with four.
+# The requests served at once (-np): 2, each with a window of its own of 262,144 tokens (SHARED below), the KV cache in
+# llama.cpp's own f16, as Hasan chose (decision 1318, 2026-11-12; FLASH_UNSLOTH_CONTEXT=1m below is the mode beside it).
+# Measured on 2026-11-12 with b12291 built on the box, the weights on the internal disk and the DFlash2 head alone
+# (variantes-20261112-0850-flux-places-b12291, np2-c524): ready in 50 s, 97,552 MiB of the GPU's, 20 GiB available at
+# ready and 14.2 at the lowest under its probes (the box's telemetry); 54.2 tok/s for one request, 63.2 in all with two
+# (34.2 each), 66.9 with four (two served, two waiting); an agent's five turns back from the cache with 61 to 77 tokens
+# computed again after the first. In q8_0 on the pinned image b12316 (variantes-20261112-1501-kvu-image-image-b12316,
+# np2-c524-q8-image): four salvoes of 4 and 8 requests, none stopped (63.2 to 65.3 tok/s in all under a GPU clock cap of
+# 2,200 MHz, which every measure of that afternoon ran under), two conversations taking turns with 19 and 20 tokens
+# computed again, 24 GiB available at ready and 16.1 at the lowest. Four windows in q8_0 (-c 1048576 -np 4, -0850-):
+# 53.0 tok/s for one request, 68.9 with four (18.2 each), 14 GiB at ready and 10 after, too thin a margin for the box.
 FLASH_UNSLOTH_SLOTS="2"
-# How they hold their windows: 0, a window of CTX for each, -c being then CTX times SLOTS and no -kvu, so that no
-# request can make another fail; 1, one window of CTX they share (-kvu), which one request may take whole, and requests
-# that together pass it all end with "Context size has been exceeded." (llama.cpp's server-context.cpp, b12316): 72.9
-# tok/s in all with four where two windows gave 66.9, an option with that risk.
+# How they hold their windows: 0, a window of CTX for each, -c being then CTX times SLOTS, the lane's: no request can
+# make another fail. 1, one window of CTX they share (-kvu), is refused (decision 1318): it was meant to serve more
+# requests at once on more context, and llama-server stopped itself under load each time requests shared a window, four
+# loads of four on 2026-11-12, with b12291 built on the box and with the pinned image b12316 ("common/common.cpp:1634:
+# failed to remove sequence N with p0=..., p1=-1", an abort in common_memory::seq_rm from post_decode:
+# nuit-20261112-1412 and -1454, variantes-20261112-1448-places-524-cram4-b12291 and -1501-kvu-image-image-b12316). It is
+# llama.cpp's open issue 31656: a draft's rejected tokens are rolled back from this hybrid model's recurrent snapshots,
+# which a sequence loses when find_slot moves its cell between the parts of a batch that a shared window splits out of
+# the sequences' order. Before they stopped: four sharing 524,288 by YaRN at twice, 22 GiB available at ready, 53.2
+# tok/s for one request and 72.6 in all with four under the clock cap of 2,200 MHz; four sharing 1,048,576, 11 GiB at
+# ready, then under 6. It comes back when llama.cpp fixes it (docs/flash-unsloth-lane.md).
 FLASH_UNSLOTH_SHARED="0"
 # A request's window, the context the model was trained for (qwen4exp.context_length in the GGUF): past it the server
 # caps a slot at 262,144 without YaRN. YARN, YaRN's factor over it, empty for none: with 2 (CTX 524288) three codes of
-# three were found at 250,000 and at 500,000 tokens (variantes-20261112-0429-contexte-b12291), one request alone, 19 GiB
-# available at ready, an option until its effect on short texts is measured. With SHARED at 0, -c holds CTX for each
-# request: set SLOTS to 1 with it, or SHARED to 1. A second window of 262,144 tokens took 8.7 GiB more of the GPU's
-# memory (88,693 MiB with one, 97,552 with two, b12291), and two of 524,288 were not measured. One request at a time
-# has 1,048,576 with YARN 4 and KV q8_0 (CTX 1048576, SLOTS 1; variantes-20261112-1001-contexte-1m-b12291): three codes
-# of three found in 985,296 tokens, computed at 440.2 tok/s, 16 GiB available at ready and 12 after, short texts at
-# 58.2 / 62.1 / 31.4 / 51.6 tok/s where q8_0 without YaRN gave 61.0 / 62.8 / 31.5 / 54.0; the answers' quality under
-# YaRN at four times and q8_0 not measured.
+# three were found at 250,000 and at 500,000 tokens, the 513,367-token prompt computed at 584.6 tok/s
+# (variantes-20261112-0429-contexte-b12291), one request alone, the KV cache in f16, 19 GiB available at ready. -c holds
+# CTX for each request; FLASH_UNSLOTH_CONTEXT=1m (below) gives one request 1,048,576.
 FLASH_UNSLOTH_CTX="262144"
 FLASH_UNSLOTH_YARN=""
-# The KV cache's type (-ctk and -ctv), llama.cpp's own f16 when empty, or q8_0: FP8 is refused for this architecture
-# ("FP8 cache is not supported for architecture 'qwen4exp'", the same set). q8_0 loads it (variantes-20261112-0704-
-# contexte-q8-b12291): three codes of three found at 250,000 tokens, that prompt computed at 659.8 tok/s against 676.0
-# in f16 (2.4 % less), 31 GiB available at ready against 27, 85,635 MiB of the GPU's against 88,693, its short decodes at
-# temperature 0 at 61.0 / 62.8 / 31.5 / 54.0 tok/s with the DFlash2 draft. An option: no evaluation of the answers ran
-# with the KV cache in q8_0.
+# The KV cache's type (-ctk and -ctv): empty for llama.cpp's own f16, the lane's (its GSM8K and HumanEval were measured
+# in f16: the lane's page, Quality), or q8_0, which the 1M mode takes; FP8 is refused for this architecture ("FP8 cache
+# is not supported for architecture 'qwen4exp'", variantes-20261112-0429-contexte-b12291). q8_0 at 262,144, one request
+# (variantes-20261112-0704-contexte-q8-b12291): three codes of three at 250,000 tokens, that prompt computed at 659.8
+# tok/s against 676.0 in f16 (2.4 % less), 31 GiB available at ready against 27, its short decodes at temperature 0 at
+# 61.0 / 62.8 / 31.5 / 54.0 tok/s. TODO(measure): the answers' quality with the KV cache in q8_0.
 FLASH_UNSLOTH_KV=""
+# FLASH_UNSLOTH_CONTEXT=1m: one request at a time with a window of 1,048,576 tokens, YaRN at four times, its KV cache in
+# q8_0 whatever KV says (the mode beside the default, decisions 1316 and 1318), as FLASH_LOCAL_CONTEXT=1m is the
+# FP4-Local lane's. Measured (variantes-20261112-1001-contexte-1m-b12291, b12291 built on the box, the DFlash2 head
+# alone): ready in 51 s, 100,881 MiB of the GPU's, 16.1 GiB available at ready, 13.9 through a prompt of 985,296 tokens
+# and 12.9 at the lowest, at its end (the box's telemetry); three codes of three found in it, computed at 440.2 tok/s;
+# short texts decoded at temperature 0 at 58.2 / 62.1 / 31.4 / 51.6 tok/s, where one request at 262,144 in q8_0 gave
+# 61.0 / 62.8 / 31.5 / 54.0 (variantes-20261112-0704-contexte-q8-b12291). TODO(measure): the answers' quality under YaRN
+# at four times. Kept for the runs after in a file of its own: a Load from the cockpit stages the unit with none of the
+# user's environment. native (or empty) brings the default back. The choice is read past the uninstall, which removes
+# it, and kept by the render that takes it, and by --prepare.
+CONTEXT_CHOICE="$CONFIG_DIR/flash-unsloth-context"
 MODEL="$FLASH_UNSLOTH_REPO"; MODEL_REV="$FLASH_UNSLOTH_REV"
 MODEL_FILES=("$FLASH_UNSLOTH_PART1" "$FLASH_UNSLOTH_PART2" "$FLASH_UNSLOTH_PART3" "$FLASH_UNSLOTH_PART4")
 DRAFT="$FLASH_UNSLOTH_DRAFT_REPO"; DRAFT_REV="$FLASH_UNSLOTH_DRAFT_REV"; DRAFT_FILE="$FLASH_UNSLOTH_DRAFT"
@@ -192,14 +214,36 @@ if [ "$ACTION" = uninstall ]; then
   vlane_uninstall_clients
   # The image is pulled, not built: its local tag goes (lanes.sh), and the GGUF files stay, said.
   llane_uninstall_runtime "$MODEL" "$DRAFT"
-  rm -f "$TEMPLATE"
+  rm -f "$TEMPLATE" "$CONTEXT_CHOICE"
   exit 0
 fi
+
+# FLASH_UNSLOTH_CONTEXT (above): given, checked and kept by the render; else the choice kept before, or the default.
+CONTEXT_GIVEN=""
+if [ -n "${FLASH_UNSLOTH_CONTEXT+set}" ]; then
+  case "$FLASH_UNSLOTH_CONTEXT" in
+    1m) ;;
+    ""|native) FLASH_UNSLOTH_CONTEXT=native ;;
+    *) die "FLASH_UNSLOTH_CONTEXT=$FLASH_UNSLOTH_CONTEXT: native (262,144 tokens for each of 2 requests at once, the default) or 1m (1,048,576 for one request)" ;;
+  esac
+  CONTEXT_GIVEN=1
+elif [ "$(head -1 "$CONTEXT_CHOICE" 2>/dev/null)" = 1m ]; then
+  FLASH_UNSLOTH_CONTEXT=1m
+else
+  FLASH_UNSLOTH_CONTEXT=native
+fi
+# The choice given, kept for the runs after (a Load stages the unit with none of the user's environment).
+keep_choice(){
+  [ -n "$CONTEXT_GIVEN" ] || return 0
+  if [ "$FLASH_UNSLOTH_CONTEXT" = 1m ]; then mkdir -p "$CONFIG_DIR" && echo 1m > "$CONTEXT_CHOICE"; else rm -f "$CONTEXT_CHOICE"; fi
+}
 
 # The unit, rendered for this box: written to $1. Its start checks the files the engine reads (llamacpp-files.sh):
 # the four parts, the draft and the chat template, each where the unit names it.
 render_unit(){
-  local slots="-np $FLASH_UNSLOTH_SLOTS" ctx="$FLASH_UNSLOTH_CTX" kv="" yarn="" files="" f in_box="/root/.cache/huggingface"
+  local n="$FLASH_UNSLOTH_SLOTS" c="$FLASH_UNSLOTH_CTX" factor="$FLASH_UNSLOTH_YARN" type="$FLASH_UNSLOTH_KV" kv="" yarn=""
+  local slots="" ctx="" files="" f
+  local in_box="/root/.cache/huggingface"
   # Numbers written with no leading zero: bash's arithmetic reads one as octal, and 08 failed ("value too great for
   # base") where 0262144 rendered -c 182472 with no word said (code review of v1.48.0, 2026-11-12).
   case "$FLASH_UNSLOTH_SLOTS" in ''|*[!0-9]*|0*) die "FLASH_UNSLOTH_SLOTS must be a number of requests, from 1, with no leading zero, got: $FLASH_UNSLOTH_SLOTS" ;; esac
@@ -207,13 +251,18 @@ render_unit(){
   case "$FLASH_UNSLOTH_LOAD" in mmap|auto|none|dio) ;; *) die "FLASH_UNSLOTH_LOAD must be mmap, auto, none or dio, got: $FLASH_UNSLOTH_LOAD" ;; esac
   case "$FLASH_UNSLOTH_YARN" in '') ;; *[!0-9]*|0*|1) die "FLASH_UNSLOTH_YARN must be empty or YaRN's factor, 2 or more, with no leading zero, got: $FLASH_UNSLOTH_YARN" ;; esac
   case "$FLASH_UNSLOTH_KV" in ''|f16|q8_0) ;; *) die "FLASH_UNSLOTH_KV must be empty, f16 or q8_0 (FP8 is refused for this model), got: $FLASH_UNSLOTH_KV" ;; esac
-  case "$FLASH_UNSLOTH_SHARED" in 0|1) ;; *) die "FLASH_UNSLOTH_SHARED must be 1 (one window the requests share) or 0 (a window each), got: $FLASH_UNSLOTH_SHARED" ;; esac
-  # one window they share (-kvu), or a window each, -c holding them all
-  if [ "$FLASH_UNSLOTH_SLOTS" -gt 1 ]; then
-    if [ "$FLASH_UNSLOTH_SHARED" = 1 ]; then slots="$slots -kvu"; else ctx=$((FLASH_UNSLOTH_CTX * FLASH_UNSLOTH_SLOTS)); fi
-  fi
-  [ -z "$FLASH_UNSLOTH_KV" ] || kv="-ctk $FLASH_UNSLOTH_KV -ctv $FLASH_UNSLOTH_KV"
-  [ -z "$FLASH_UNSLOTH_YARN" ] || yarn="--rope-scaling yarn --yarn-orig-ctx 262144 --rope-scale $FLASH_UNSLOTH_YARN"
+  case "$FLASH_UNSLOTH_SHARED" in
+    0) ;;
+    1) die "FLASH_UNSLOTH_SHARED=1 (one window the requests share, -kvu) is refused: llama-server stopped itself under load each time requests shared a window (\"failed to remove sequence\", measured on 2026-11-12 with b12291 and with the image b12316; llama.cpp issue 31656). Set it to 0, a window each." ;;
+    *) die "FLASH_UNSLOTH_SHARED must be 0 (a window for each request), got: $FLASH_UNSLOTH_SHARED" ;;
+  esac
+  # FLASH_UNSLOTH_CONTEXT=1m: one request, a window of 1,048,576 by YaRN at four times, its KV cache in q8_0, as measured
+  # (above)
+  if [ "$FLASH_UNSLOTH_CONTEXT" = 1m ]; then n=1; c=1048576; factor=4; type=q8_0; fi
+  # a window for each request, -c holding them all
+  slots="-np $n"; ctx=$((c * n))
+  [ -z "$type" ] || kv="-ctk $type -ctv $type"
+  [ -z "$factor" ] || yarn="--rope-scaling yarn --yarn-orig-ctx 262144 --rope-scale $factor"
   for f in "${MODEL_FILES[@]}"; do files="$files $(llane_path "$MODEL" "$MODEL_REV" "$f")"; done
   files="$files $(llane_path "$DRAFT" "$DRAFT_REV" "$DRAFT_FILE") $TEMPLATE"
   sed -e "s|__USER__|$(id -un)|g" -e "s|__GROUP__|$(id -gn "$(id -un)")|g" -e "s|__HOME__|$HOME|g" \
@@ -224,6 +273,7 @@ render_unit(){
       -e "s|__LOAD__|$FLASH_UNSLOTH_LOAD|g" -e "s|__YARN__|$yarn|g" \
       -e "s|__ENGINE_BIND__|$ENGINE_BIND|g" -e "s|__PORT__|$PORT|g" \
       "$HERE/$UNIT.template" > "$1"
+  keep_choice
 }
 
 # Step 4, the one part that needs root: the unit and its start scripts. A function, since a lane
@@ -303,6 +353,8 @@ pin_tag flash-unsloth "$FLASH_UNSLOTH_IMAGE"
 unpin_stale flash-unsloth "$FLASH_UNSLOTH_IMAGE" || true
 
 if [ "$MODE" = prepare ]; then
+  # its Load renders the unit, with the window chosen here (FLASH_UNSLOTH_CONTEXT)
+  keep_choice
   step "Done: the Qwen3.8 Flash-Next Unsloth GGUF lane's image is ready; its Load fetches the GGUF files and starts it"
   exit 0
 fi

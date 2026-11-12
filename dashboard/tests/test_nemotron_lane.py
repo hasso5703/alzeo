@@ -331,7 +331,9 @@ class ItsUnit(Base):
 
     def test_it_is_a_switch_target_a_unit_the_page_may_drive_and_a_lane_it_prepares(self):
         self.assertIn(U, self.ck.SERVING_UNITS)
-        self.assertEqual(self.ck.ACTIONS["switch"]["params"]["target"][-3:-1], ["nemotron", "nemotron-super"])
+        # targets, not positions: nothing reads the list in order (the cockpit checks a parameter by membership,
+        # cockpit.py's start_action), and a lane added at its end moved them (the Unsloth GGUF lane's, v1.48)
+        self.assertLessEqual({"nemotron", "nemotron-super"}, set(self.ck.ACTIONS["switch"]["params"]["target"]))
         self.assertEqual(self.ck.target_lane("nemotron"), "nemotron")
         self.assertEqual(self.ck.TARGET_PIN["nemotron"], "NEMOTRON_BOLT_REV")
         self.assertIn("NEMOTRON_BOLT_REV", self.ck.rg.PIN_MODELS)

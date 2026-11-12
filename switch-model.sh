@@ -825,9 +825,10 @@ if [ "$CHOICE" = "flash-unsloth" ]; then
     echo "opencode integration is off on this box (./install.sh --no-opencode): default model left alone"
   else
     FLU_OC_SUM="$({ cat "$CONFIG_DIR/opencode.json" "$HOME/.config/opencode/opencode.json" 2>/dev/null || true; } | sha256sum)"
-    # the window of the unit just staged (its -c), the context of every request at a time
+    # the window of the unit just staged (its -c, a window for each request), and its pair: 262,144 by default,
+    # 1,048,576 for one request with FLASH_UNSLOTH_CONTEXT=1m, the choice its installer kept (decisions 1316 and 1318)
     FLU_WINDOW="$(llamacpp_window "$FLASH_UNSLOTH_UNIT")"
-    FLU_PAIR="$("$REPO_DIR/oc-limits.sh" flash-unsloth)" || FLU_PAIR=""
+    FLU_PAIR="$("$REPO_DIR/oc-limits.sh" flash-unsloth --from "$FLASH_UNSLOTH_UNIT")" || FLU_PAIR=""
     read -r FLU_CTX FLU_OUT _ <<< "$FLU_PAIR"
     FLU_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label flash-unsloth "${FLU_WINDOW:-262144}" || true)"
     FLU_PORT="$({ grep -m1 -oE 'PROXY_PORT=[0-9]+|keepalive-proxy.py [0-9]+' /etc/systemd/system/qwen38-keepalive.service 2>/dev/null || true; } | grep -oE '[0-9]+$' || true)"
@@ -840,6 +841,10 @@ if [ "$CHOICE" = "flash-unsloth" ]; then
       for OC_JSON in "$CONFIG_DIR/opencode.json" "$HOME/.config/opencode/opencode.json"; do
         [ -f "$OC_JSON" ] || continue
         python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" --add-providers "$FLU_SRC" >/dev/null || true
+        # and an entry already there takes the pair of the unit's window: --add-providers adds a missing provider only
+        # (the FP4-Local lane's rule, second review of v1.45.2)
+        python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" flash-unsloth qwen3.8-flash-next-unsloth "$FLU_CTX" "$FLU_OUT" >/dev/null \
+          || echo "NOTE: could not update the Qwen3.8 Flash-Next Unsloth GGUF limits in $OC_JSON; check them by hand ($FLU_PAIR)"
         python3 "$REPO_DIR/oc-point-default.py" "$OC_JSON" flash-unsloth flash-unsloth "${FLU_WINDOW:-262144}" \
           || echo "NOTE: could not update $OC_JSON (hand-edited?); set its \"model\" field yourself"
         [ -n "$FLU_KEEP" ] && { python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" --compaction "$FLU_KEEP" \

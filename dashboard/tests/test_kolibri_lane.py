@@ -392,7 +392,9 @@ class ItsUnit(Base):
 
     def test_it_is_a_switch_target_and_a_unit_the_page_may_drive(self):
         self.assertIn("qwen38-kolibri.service", self.ck.SERVING_UNITS)
-        self.assertEqual(self.ck.ACTIONS["switch"]["params"]["target"][-5:-3], ["kolibri", "kolibri-nvfp4"])
+        # targets, not positions: nothing reads the list in order (the cockpit checks a parameter by membership,
+        # cockpit.py's start_action), and a lane added at its end moved them (the Unsloth GGUF lane's, v1.48)
+        self.assertLessEqual({"kolibri", "kolibri-nvfp4"}, set(self.ck.ACTIONS["switch"]["params"]["target"]))
         self.assertIn("qwen38-kolibri", self.ck.CONTAINERS)
         self.assertNotIn("qwen38-kolibri", self.ck.SGL_CONTAINERS)
         self.assertIn("qwen38-kolibri.service", self.ck.JOURNAL_UNITS)

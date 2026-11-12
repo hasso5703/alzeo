@@ -4,39 +4,48 @@
 
 **The lane.** `install-flash-unsloth.sh` serves Unsloth's dynamic 4-bit GGUF of Qwen3.8-Flash-Next
 (`unsloth/Qwen3.8-Flash-Next-GGUF`, UD-Q4_K_XL: 76.9 GiB of weights) with llama.cpp's own server, from the image the
-llama.cpp project publishes for arm64 with CUDA (`server-cuda13`, b12316, pinned by digest: nothing is built on the box).
-Tokens are proposed by llama.cpp's n-gram lookup, then by ggml-org's GGUF of the DFlash2 draft (Q8_0), up to 7 a step,
-kept from a probability of 0.5 and checked by rejection sampling. It serves on the text port behind the proxy and the
-box's key as `qwen3.8-flash-next-unsloth`, OpenAI and Anthropic dialects alike, text only, to two requests at once,
-each with a window of its own of the 262,144 tokens the model was trained for. Its n-gram table (26.8 GiB) stays on the
-disk, read row by row as the tokens need it (`--lazy-mode on`): without it the GB10, an integrated GPU, loads the table
-with the weights, and the box's memory guard stopped the load at 5 GiB free. Its weights are copied into the GPU's
-memory (`--load-mode none`): read in place in the page cache (`mmap`), the same files decoded at 27.9 tok/s in the
-evening and about 25 at night, and side by side `none` gave 27.6 where `mmap` gave 24.9. With its two windows the lane
-holds 97,552 MiB of the GPU's at ready and leaves 20 GiB to the box, 14 after the probes of two and four requests at
-once. Where its files sit (the USB SSD or the internal disk) made no difference to the decode, and it reads them where
-the cache keeps them, with no copy and no preload; from the USB SSD three starts of five took 261 to 281 s, their first
-answers slower, against 35 to 50 s from the internal disk. Measured one request at a time at the model card's sampling
-on the pinned image, its files on the USB SSD (2026-11-12, each text's first pass): 51.8 tok/s in code, 56.9 in
-reasoning, 31.5 in prose and 123.7 in a rewrite of code. On b12282's image, measured first, the lookup slowed the draft
-down (46.9, 43.9, 22.9 and 116.2, against 53.8, 58.8, 31.3 and 52.0 with the draft alone and 27.9, 27.7, 27.3 and 27.4
-with no draft), hence b12316. Two requests at once gave 63.2 tok/s in all, 34.2 each, against 54.2 for one (b12291 built
-on the box): each has a window of its own, so that neither can make the other fail, and a third waits its turn. One
-window shared by four gave 72.9 tok/s in all and is an option (`FLASH_UNSLOTH_SHARED=1`), with its risk: llama-server
-lets go of idle requests' tokens first when the window is full, and requests in progress that still do not fit all end
-with "Context size has been exceeded.". Four windows with the KV cache in q8_0 left 10 GiB to the box after the probes:
-not taken. The whole window is read: three codes of three found in a prompt of 255,529 tokens. A window of 524,288
-tokens with YaRN is an option, a few lines of the installer for one request at a time (three codes of three at 500,000
-tokens), not the default until its effect on short texts is measured; the KV cache in FP8 is refused for this model,
-and the installer takes f16 or q8_0 (q8_0 read the window whole too, its prompt computed 2.4 % slower, with 4 GiB more
-left to the box, and no evaluation of the answers ran in it). One request at a time can have a window of 1,048,576
-tokens, YaRN at four times and the KV cache in q8_0: three codes of three found in 985,296 tokens, 12 GiB left to the
-box after; the quality of its answers there is not measured. GSM8K 98.4 % (250 questions) and HumanEval 99.4 % (164
-problems) at the `medium` effort and temperature 0, and 20 tool calls right out of 20 (b12291 built on the box, the
-DFlash2 draft alone); MMLU not measured. These are measures of minutes run back to back, during which the box's hottest
-zone peaked at 88 to 95.5 °C: no continuous load was measured. TODO(measure): several requests at once with the table
-on the USB SSD, the eight clients, the prefix cache through the proxy, the memory at a long prompt's peak, the same
-under the unit's `--memory 110g`. Every number and the settings measured: `docs/flash-unsloth-lane.md`.
+llama.cpp project publishes for arm64 with CUDA (`server-cuda13`, b12316, pinned by digest: nothing is built on the
+box). Tokens are proposed by llama.cpp's n-gram lookup, then by ggml-org's GGUF of the DFlash2 draft (Q8_0), up to 7 a
+step, kept from a probability of 0.5 and checked by rejection sampling. It serves on the text port behind the proxy and
+the box's key as `qwen3.8-flash-next-unsloth`, OpenAI and Anthropic dialects alike, text only, to two requests at once,
+each with a window of its own of the 262,144 tokens the model was trained for (`-c 524288 -np 2`, the KV cache in f16;
+Hasan's decision 1318, 2026-11-12), or, with `FLASH_UNSLOTH_CONTEXT=1m` chosen at install as `FLASH_LOCAL_CONTEXT=1m` is
+the FP4-Local lane's and kept for the Loads after, to one request at a time with a window of 1,048,576 (YaRN at four
+times, the KV cache in q8_0). Its n-gram table (26.8 GiB) stays on the disk, read row by row as the tokens need it
+(`--lazy-mode on`): without it the GB10, an integrated GPU, loads the table with the weights, and the box's memory guard
+stopped the load at 5 GiB free. Its weights are copied into the GPU's memory (`--load-mode none`): read in place in the
+page cache (`mmap`), the same files decoded at 27.9 tok/s in the evening and about 25 at night, and side by side `none`
+gave 27.6 where `mmap` gave 24.9. With its two windows the lane holds 97,552 MiB of the GPU's at ready and leaves 20 GiB
+to the box, 14.2 at the lowest under the probes of two and four requests at once. Where its files sit (the USB SSD or
+the internal disk) made no difference to the decode, and it reads them where the cache keeps them, with no copy and no
+preload; from the USB SSD three starts of five took 261 to 281 s, their first answers slower, against 35 to 50 s from
+the internal disk. Measured one request at a time at the model card's sampling on the pinned image, its files on the USB
+SSD (2026-11-12, each text's first pass): 51.8 tok/s in code, 56.9 in reasoning, 31.5 in prose and 123.7 in a rewrite of
+code. On b12282's image, measured first, the lookup slowed the draft down (46.9, 43.9, 22.9 and 116.2, against 53.8,
+58.8, 31.3 and 52.0 with the draft alone and 27.9, 27.7, 27.3 and 27.4 with no draft), hence b12316. Two requests at
+once gave 63.2 tok/s in all, 34.2 each, against 54.2 for one (b12291 built on the box): each has a window of its own, so
+that neither can make the other fail, and a third waits its turn. A window shared by several requests (`-kvu`) is
+refused (`FLASH_UNSLOTH_SHARED=1` stops the installer, which says why): meant to serve more requests at once on more
+context, it stopped llama-server under load four times of four on 2026-11-12, with b12291 built on the box and with the
+pinned image b12316 ("common/common.cpp:1634: failed to remove sequence N with p0=..., p1=-1", an abort in
+`common_memory::seq_rm` from `post_decode`): llama.cpp's open issue 31656, a draft's rollback on this hybrid model's
+recurrent state, which a shared window's batches lose. Before it stopped, four requests sharing 524,288 tokens left 22
+GiB to the box at ready and decoded 72.6 tok/s in all (under a GPU clock cap of 2,200 MHz); four sharing 1,048,576 left
+the box under 6 GiB. It comes back when llama.cpp fixes it. Four windows with the KV cache in q8_0 left 10 GiB to the
+box after the probes: not taken. The whole window is read: three codes of three found in a prompt of 255,529 tokens. A
+window of 524,288 tokens with YaRN is an option, a few lines of the installer for one request at a time (three codes of
+three at 500,000 tokens), not the default until its effect on short texts is measured; the KV cache in FP8 is refused
+for this model, and the installer takes f16 or q8_0 (q8_0 read the window whole too, its prompt computed 2.4 % slower,
+with 4 GiB more left to the box, and no evaluation of the answers ran in it). The 1M mode: 100,881 MiB of the GPU's at
+ready, 16.1 GiB left to the box and 12.9 at the lowest, three codes of three found in a prompt of 985,296 tokens,
+computed at 440.2 tok/s; through the proxy a prompt may have 964,689 tokens there, and opencode, pi and `claude-local`
+get a context of 830,000 tokens and 32,000 out (205,000 at the native window); TODO(measure): the quality of its
+answers. GSM8K 98.4 % (250 questions) and HumanEval 99.4 % (164 problems) at the `medium` effort and temperature 0, and
+20 tool calls right out of 20 (b12291 built on the box, the DFlash2 draft alone); MMLU not measured. These are measures
+of minutes run back to back, during which the box's hottest zone peaked at 88 to 95.5 °C: no continuous load was
+measured. TODO(measure): several requests at once with the table on the USB SSD, the eight clients, the prefix cache
+through the proxy, the memory at a long prompt's peak, the same under the unit's `--memory 110g`. Every number and the
+settings measured: `docs/flash-unsloth-lane.md`.
 
 **Its files, pinned one by one.** The repository holds every quantization of the model: the lane takes the four parts
 of one folder and the draft, each by its sha256 and its size (`PATH=SHA256:SIZE`, read from the Hub's LFS pointers and

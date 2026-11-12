@@ -97,6 +97,15 @@ if [ -n "${FLASH_LOCAL_EFFORT+set}" ]; then
   printf 'NOTE: FLASH_LOCAL_EFFORT is not read by ./install.sh: run FLASH_LOCAL_EFFORT=%s ./install-flash-local.sh --units-only,\n      then Load the lane (docs/flash-local-lane.md). This run keeps the level chosen before.\n' "$FLASH_LOCAL_EFFORT"
   unset FLASH_LOCAL_EFFORT
 fi
+# FLASH_UNSLOTH_CONTEXT, the Qwen3.8 Flash-Next Unsloth GGUF lane's window (262,144 tokens for each of 2 requests, or
+# 1,048,576 for one; decisions 1316 and 1318, 2026-11-12), is its own installer's to set, for FLASH_LOCAL_CONTEXT's
+# reason: this run sizes the clients from the lane's unit before it renders that unit again. Not read, the unit rendered
+# again serves the window chosen before (its installer keeps the choice), and a Load sets the clients for it
+# (switch-model.sh).
+if [ -n "${FLASH_UNSLOTH_CONTEXT+set}" ]; then
+  printf 'NOTE: FLASH_UNSLOTH_CONTEXT is not read by ./install.sh: run FLASH_UNSLOTH_CONTEXT=%s ./install-flash-unsloth.sh --units-only,\n      then Load the lane (docs/flash-unsloth-lane.md). This run keeps the window chosen before.\n' "$FLASH_UNSLOTH_CONTEXT"
+  unset FLASH_UNSLOTH_CONTEXT
+fi
 # the side lanes' checkpoints, which their installers read from the environment (2026-10-17)
 _ENV_KOLIBRI_VARIANT="${KOLIBRI_VARIANT:-}"; _ENV_IMAGE_MODEL="${IMAGE_MODEL:-}"; _ENV_VIDEO_VARIANT="${VIDEO_VARIANT:-}"
 # A run installs the text lane that does not serve as well, beside the one it serves: it
@@ -2455,9 +2464,10 @@ fi
 [ -f "$FLASH_UNSLOTH_UNIT_PATH" ] && OC_FLASH_UNSLOTH=1
 OC_FLASH_UNSLOTH_CTX=""; OC_FLASH_UNSLOTH_OUT=""; OC_FLASH_UNSLOTH_NAME=""; OC_FLASH_UNSLOTH_WINDOW=""
 if [ "$OC_FLASH_UNSLOTH" -eq 1 ]; then
-  # its unit's window, the -c its llama-server takes
+  # its unit's window, the -c its llama-server takes, and the pair of that window: 262,144 for each of its two requests,
+  # 1,048,576 for one with FLASH_UNSLOTH_CONTEXT=1m (decisions 1316 and 1318, 2026-11-12)
   OC_FLASH_UNSLOTH_WINDOW="$(llamacpp_window "$FLASH_UNSLOTH_UNIT_PATH")"
-  OC_FLASH_UNSLOTH_PAIR="$("$REPO_DIR/oc-limits.sh" flash-unsloth)" \
+  OC_FLASH_UNSLOTH_PAIR="$("$REPO_DIR/oc-limits.sh" flash-unsloth --from "$FLASH_UNSLOTH_UNIT_PATH")" \
     || die "oc-limits.sh refused flash-unsloth (repo bug: please open an issue)"
   OC_FLASH_UNSLOTH_CTX="${OC_FLASH_UNSLOTH_PAIR%% *}"; OC_FLASH_UNSLOTH_OUT="$(echo "$OC_FLASH_UNSLOTH_PAIR" | cut -d' ' -f2)"
   OC_FLASH_UNSLOTH_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label flash-unsloth "${OC_FLASH_UNSLOTH_WINDOW:-262144}" || true)"
@@ -2850,6 +2860,12 @@ if [ -f "$OC_USER_CFG" ]; then
   if [ "$OC_FLASH_LOCAL" -eq 1 ] && [ -n "$OC_FLASH_LOCAL_CTX" ]; then
     python3 "$REPO_DIR/oc-merge-limits.py" "$OC_USER_CFG" flash-local qwen3.8-flash-next-fp4 \
       "$OC_FLASH_LOCAL_CTX" "$OC_FLASH_LOCAL_OUT" >/dev/null || true
+  fi
+  # and the Qwen3.8 Flash-Next Unsloth GGUF lane's follows its unit's window the same way (2026-11-12: 262,144 by
+  # default, 1,048,576 in its 1M mode)
+  if [ "${OC_FLASH_UNSLOTH:-0}" -eq 1 ] && [ -n "${OC_FLASH_UNSLOTH_CTX:-}" ]; then
+    python3 "$REPO_DIR/oc-merge-limits.py" "$OC_USER_CFG" flash-unsloth qwen3.8-flash-next-unsloth \
+      "$OC_FLASH_UNSLOTH_CTX" "$OC_FLASH_UNSLOTH_OUT" >/dev/null || true
   fi
 fi
 # The default model and the served entry's picker name follow the install, not

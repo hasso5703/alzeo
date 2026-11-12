@@ -364,17 +364,22 @@ class ABoxBootingFlashUnsloth(unittest.TestCase):
     text alone: the lane loads no vision projector."""
 
     def test_the_default_the_compaction_and_the_provider_are_its(self):
-        d = generate("27b", "1m", unit_ctx=1010000, flash_unit=True, pair=("551000", "160000"),
-                     unsloth_unit=True, unsloth_boot=True, doc=True)
-        self.assertEqual(d["model"], "flash-unsloth/qwen3.8-flash-next-unsloth")
-        ctx, out, *_ = subprocess.run([str(REPO / "oc-limits.sh"), "flash-unsloth"], capture_output=True,
-                                      text=True, check=True).stdout.split()
-        keep = int(subprocess.run([str(REPO / "oc-limits.sh"), "--preserve", ctx], capture_output=True,
-                                  text=True, check=True).stdout)
-        self.assertEqual(d["compaction"]["preserve_recent_tokens"], keep)
-        m = d["provider"]["flash-unsloth"]["models"]["qwen3.8-flash-next-unsloth"]
-        self.assertEqual(m["limit"], {"context": int(ctx), "input": int(ctx), "output": int(out)})
-        self.assertEqual(m["name"], "Qwen3.8-Flash-Next Unsloth UD-Q4_K_XL + DFlash2 (local, 262K)")
+        # its window: by default 262,144 for each of its two requests, the native pair, and one request's 1,048,576 in
+        # its 1M mode, the 1m pair (decisions 1316 and 1318, 2026-11-12)
+        for slots, mode, said in (("-c 524288 -np 2", "native", "262K"),
+                                  ("-c 1048576 -np 1 -ctk q8_0 -ctv q8_0", "1m", "1M")):
+            with self.subTest(mode=mode):
+                d = generate("27b", "1m", unit_ctx=1010000, flash_unit=True, pair=("551000", "160000"),
+                             unsloth_unit=True, unsloth_boot=True, unsloth_slots=slots, doc=True)
+                self.assertEqual(d["model"], "flash-unsloth/qwen3.8-flash-next-unsloth")
+                ctx, out, *_ = subprocess.run([str(REPO / "oc-limits.sh"), "flash-unsloth", mode], capture_output=True,
+                                              text=True, check=True).stdout.split()
+                keep = int(subprocess.run([str(REPO / "oc-limits.sh"), "--preserve", ctx], capture_output=True,
+                                          text=True, check=True).stdout)
+                self.assertEqual(d["compaction"]["preserve_recent_tokens"], keep)
+                m = d["provider"]["flash-unsloth"]["models"]["qwen3.8-flash-next-unsloth"]
+                self.assertEqual(m["limit"], {"context": int(ctx), "input": int(ctx), "output": int(out)})
+                self.assertEqual(m["name"], f"Qwen3.8-Flash-Next Unsloth UD-Q4_K_XL + DFlash2 (local, {said})")
         self.assertFalse(m["attachment"])
         self.assertEqual(m["modalities"], {"input": ["text"], "output": ["text"]})
         self.assertEqual(list(m["variants"]), ["lean", "low", "medium", "xhigh"])
@@ -389,6 +394,14 @@ class ABoxBootingFlashUnsloth(unittest.TestCase):
         self.assertEqual((int(ctx), int(out)), (int(fctx), int(fout)), "the same model and window as the flash lane")
         self.assertLessEqual(int(ctx) - 20000 + 43863 + int(out), 262144, "threshold + worst step + answer fit the window")
         self.assertEqual(label.strip(), "local, 262K")
+        # its 1M mode's 1,048,576 for one request by YaRN (decisions 1316 and 1318, 2026-11-12), the pool there (no
+        # flash ceiling), the pair sized by the FP4-Local lane's rule at its 1M: its pool less 10 % holds context and
+        # answer, and its window the worst step too; the lane's answer budget kept
+        ctx, out, label = subprocess.run([str(REPO / "oc-limits.sh"), "flash-unsloth", "1m"], capture_output=True,
+                                         text=True, check=True).stdout.split(" ", 2)
+        self.assertLessEqual(int(ctx) + int(out), int(1048576 * 0.92 * 0.90), "its pool less 10 %")
+        self.assertLessEqual(int(ctx) - 20000 + 43863 + int(out), 1048576, "with the worst step, its window")
+        self.assertEqual((int(out), label.strip()), (int(fout), "local, 1M"))
 
     def test_installed_but_not_at_boot_it_is_offered_and_the_27b_keeps_its_own(self):
         d = generate("27b", "1m", unit_ctx=1010000, pair=("551000", "160000"), unsloth_unit=True, doc=True)

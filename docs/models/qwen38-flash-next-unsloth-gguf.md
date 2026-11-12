@@ -20,10 +20,15 @@ lookup and ggml-org's GGUF of the DFlash2 draft, as a lane of its own beside the
   either, on the image measured before it (b12282).
 - **63.2 tok/s** in all with two requests at once, each with a window of its own of 262,144 tokens, against 54.2 for one.
 - The whole window read: three codes of three found in a prompt of 255,529 tokens; with YaRN, 524,288 tokens as an
-  option, and 1,048,576 for one request at a time (three codes of three in 985,296 tokens).
+  option, and `FLASH_UNSLOTH_CONTEXT=1m` at install for **one request at a time with 1,048,576 tokens** (three codes of
+  three in 985,296 tokens, the KV cache in q8_0).
 - GSM8K **98.4 %** (250 questions) and HumanEval **99.4 %** (164 problems) at the medium effort and temperature 0, and
   20 tool calls right out of 20 (llama.cpp b12291 built on the box, the DFlash2 draft alone); MMLU not measured.
-- **95.3 GiB** of the GPU's memory at ready with its two windows and its draft, **20 GiB** left to the box.
+  TODO(measure): its quality in its 1M mode.
+- **95.3 GiB** of the GPU's memory at ready with its two windows and its draft, **20 GiB** left to the box, 14.2 at the
+  lowest under its probes; 98.5 GiB and 16.1 left in its 1M mode.
+- A window shared by several requests (`-kvu`) is refused for now: llama-server stopped itself under load each time
+  requests shared one (four loads of four, 2026-11-12, llama.cpp's open issue 31656; the lane page has the numbers).
 - Ready in 35 to 50 s with its files on the internal disk, 50 to 281 s from a USB SSD.
 - 117 GB on disk: 112 for its GGUF files and their draft, 4.5 for the image.
 - Measures of minutes, run back to back: no continuous load was measured.

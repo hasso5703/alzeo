@@ -1165,6 +1165,22 @@ class ALaneSaysTheWindowItsUnitRuns(unittest.TestCase):
         self.assertEqual(r["native"], "Text and images, 262K tokens of context")
         self.assertEqual(r["wide"], "Text and images, 1M tokens of context")
 
+    def test_the_unsloth_lane_says_262k_by_default_and_1m_in_its_1m_mode(self):
+        # FLASH_UNSLOTH_CONTEXT=1m (decisions 1316 and 1318, 2026-11-12): one request at 1,048,576 tokens, where each of
+        # the two requests of its default has 262,144
+        r = run(self, r"""
+        const row = (window) => ({engine: 'llama.cpp', version: 'b12316', label: 'llama.cpp b12316', pin: 'p',
+                                  reports: 'x', pinned: true, window});
+        const U = JSON.parse(JSON.stringify(UNITS)); U.units['qwen38-flash-unsloth.service'] = {active: 'inactive', enabled: 'disabled'};
+        feed({config: CONFIG, units: U, lifecycle: life({'qwen38-sglang.service': eng('ready')}),
+              engine_table: {table: {'qwen38-flash-unsloth.service': row(262144)}}});
+        const native = BAYS.get('qwen38-flash-unsloth.service').kind.textContent;
+        feed({engine_table: {table: {'qwen38-flash-unsloth.service': row(1048576)}}, lifecycle: life({'qwen38-sglang.service': eng('ready')})});
+        report({native, wide: BAYS.get('qwen38-flash-unsloth.service').kind.textContent});
+        """)
+        self.assertEqual(r["native"], "Text, 262K tokens of context")
+        self.assertEqual(r["wide"], "Text, 1M tokens of context")
+
     def test_the_lane_that_serves_says_its_engines_window(self):
         # a unit staged again while its lane serves names a window its engine does not run yet: the page said "1M" of
         # an engine serving 262,144 (code review of v1.45.2). The lane that serves says its engine's, the unit the others

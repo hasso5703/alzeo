@@ -290,9 +290,9 @@ def main(argv: list[str]) -> int:
             # 404 on both routes (engine_info asks the second on a 404 only): an engine answers, and it is not
             # SGLang. vLLM has neither route, and this said "start one first" under a vLLM lane that served
             # (found 2026-11-10). The code stays 1: the installer and the cockpit's job read it as "not fitted"
-            print(f"the engine at {base} is not SGLang (404 on /server_info and /get_server_info, as on vLLM): "
-                  f"a vLLM lane's opencode limits are its own, set when it is loaded, and there is nothing to fit "
-                  f"to its pool")
+            print(f"the engine at {base} is not SGLang (404 on /server_info and /get_server_info, as on vLLM and "
+                  f"llama.cpp): a vLLM or llama.cpp lane's opencode limits are its own, set when it is loaded, and "
+                  f"there is nothing to fit to its pool")
         else:
             print(f"no engine to read at {base} ({type(e).__name__}): start one first, "
                   f"the pool is only known once it has booted")

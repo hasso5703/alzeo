@@ -25,19 +25,21 @@ ExecStartPre=/bin/bash __HOME__/.config/qwen38/engine-preflight.sh qwen38-flash-
 #   --lazy-mode on: the model's n-gram table (its fourth part, 26.8 GiB in IQ4_NL) is read from the disk row by row
 #     as the tokens need it, instead of being held in memory. Without it, on this GPU (an integrated one, which
 #     llama.cpp's auto mode loads without mmap) the table loads with the weights: at 131,072 tokens of context the
-#     guard stopped the load at 5 GiB free; with it the lane leaves 20 GiB available at ready with its two windows.
+#     guard stopped the load at 5 GiB free; with it, one request at a window of 1,048,576 tokens left 16 GiB
+#     available at ready.
 #     --load-mode, the installer's LOAD (none, 2026-11-12): the weights copied into the GPU's memory, 27.6 tok/s where
 #     mmap, which has the GPU read them in place in the page cache, decoded at 24.9 side by side (the installer has the
 #     numbers). The files are read where the cache keeps them, with no copy and no preload; from a USB SSD a start
 #     took 261 to 281 s in three starts and 50 to 90 s in two others, and the first answers after a slow one were slower.
 #   -ngl 999 -fa on --no-repack: every layer on the GPU, flash attention, and no repacking of the tensors that
 #     stay on the processor's side (the table): repacking would copy what is read in place.
-#   -c: the windows, the installer's CTX for each request (the context the model was trained for, 262,144 tokens, read
-#     in the GGUF), YaRN's options past it (its YARN), the KV cache's type (its KV), and -np, the requests at once (its
-#     SLOTS, 2), each with a window of its own (its SHARED at 0: -c holds them all, and no request can make another
-#     fail); a third request waits for one of them to end. SHARED at 1 has them share one window (-kvu): a request may
-#     take all of it, idle requests' tokens are let go first when it is full, and requests that still do not fit all
-#     end with "Context size has been exceeded." (llama.cpp's server-context.cpp). --jinja and
+#   -c: the windows, the installer's CTX for each request (262,144 tokens, the context the model was trained for, read
+#     in the GGUF), YaRN's options past it (its YARN), the KV cache's type (its KV, llama.cpp's own f16), and -np, the
+#     requests at once (its SLOTS, 2), each with a window of its own (-c holds them all, and no request can make
+#     another fail); a third request waits for one of them to end. A window the requests share (-kvu) is refused:
+#     llama-server stopped itself under load each time requests shared one (the installer says how).
+#     FLASH_UNSLOTH_CONTEXT=1m renders one request at a time instead, with a window of 1,048,576 by YaRN at four times
+#     and the KV cache in q8_0. --jinja and
 #     --chat-template-file: the chat template the GGUF carries, Unsloth's, with the fixes the other Qwen lanes'
 #     templates have (install-flash-unsloth.sh says which); the model card's sampling (temperature 1.0, top_p
 #     0.95, top_k 20) is in the GGUF, and the server applies it to a request that sets none.

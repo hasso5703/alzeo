@@ -11,6 +11,7 @@ import hashlib
 import http.server
 import importlib.util
 import io
+import json
 import os
 import pathlib
 import re
@@ -209,18 +210,24 @@ class TheStagedUnit(unittest.TestCase):
         """The defaults, measured on 2026-11-11 and 12: the weights copied into the GPU's memory (--load-mode none: 27.6
         tok/s where mmap gave 24.9 side by side, b12291), two requests at once with a window of 262,144 tokens each, so
         that none can make the other fail (63.2 tok/s in all with two, against 54.2 for one, 20 GiB available at ready,
-        b12291), the trained window with no YaRN, llama.cpp's own KV cache type, and the n-gram lookup before the
-        DFlash2 draft (on the pinned image b12316: 51.8 tok/s in code, 123.7 in a rewrite of code)."""
+        b12291), the trained window with no YaRN, llama.cpp's own KV cache type, in which its GSM8K and HumanEval ran
+        (Hasan's decision 1318, 2026-11-12), and the n-gram lookup before the DFlash2 draft (on the pinned image b12316:
+        51.8 tok/s in code, 123.7 in a rewrite of code)."""
         rc, out = self.stage()
         self.assertEqual(rc, 0, out)
         cmd = exec_command(self.out.read_text())
         self.assertIn("--load-mode none --lazy-mode on", cmd)
         self.assertRegex(cmd, r"-c 524288 -np 2\s+-md ")
-        self.assertNotIn("-kvu", cmd.split())
+        # no window shared, and none of the prompt cache's options that went with it (decisions 1316 to 1318)
+        self.assertFalse({"-kvu", "--cache-ram", "--no-cache-idle-slots"} & set(cmd.split()), cmd)
         self.assertNotIn("--rope-scaling", cmd)
         self.assertNotRegex(cmd, r"(?<![\w-])-ct[kv](?![\w-])")
         self.assertIn("--spec-type ngram-mod,draft-dflash --spec-draft-n-max 7 --spec-draft-p-min 0.5 "
                       "--spec-draft-sampling probabilistic", cmd)
+        # one request's window, which opencode's limits and the proxy read: its own
+        said = subprocess.run(["bash", "-c", '. "$1"; llamacpp_window "$2"', "_", str(REPO / "lanes.sh"), str(self.out)],
+                              capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", "HOME": str(self.home)})
+        self.assertEqual(said.stdout.strip(), "262144", said.stderr)
 
     def staged_with(self, **values):
         """The unit an installer whose measured variables hold these values stages, from a copy of the repository:
@@ -242,12 +249,12 @@ class TheStagedUnit(unittest.TestCase):
         return r.returncode, r.stdout + r.stderr, exec_command(self.out.read_text()) if self.out.exists() else ""
 
     def test_the_measured_options_render_as_the_installer_sets_them(self):
-        """The window past the trained one takes YaRN's options, more requests at once share the window, and a value
-        the engine would refuse stops the stage: the installer's variables of the night's measures (2026-11-12)."""
-        rc, out, cmd = self.staged_with(YARN="2", CTX="524288", SLOTS="8", SHARED="1", KV="q8_0", LOAD="dio")
+        """The window past the trained one takes YaRN's options, -c holds a window for each request, and a value the
+        engine would refuse stops the stage: the installer's variables of the night's measures (2026-11-12)."""
+        rc, out, cmd = self.staged_with(YARN="2", CTX="524288", SLOTS="2", KV="q8_0", LOAD="dio")
         self.assertEqual(rc, 0, out)
         self.assertIn("--load-mode dio --lazy-mode on", cmd)
-        self.assertRegex(cmd, r"-c 524288 -np 8 -kvu -ctk q8_0 -ctv q8_0 --rope-scaling yarn --yarn-orig-ctx 262144 "
+        self.assertRegex(cmd, r"-c 1048576 -np 2 -ctk q8_0 -ctv q8_0 --rope-scaling yarn --yarn-orig-ctx 262144 "
                               r"--rope-scale 2\s")
         # FP8 is refused for this model's architecture ("FP8 cache is not supported for architecture 'qwen4exp'",
         # 2026-11-12): the render refuses it before the engine does
@@ -261,23 +268,37 @@ class TheStagedUnit(unittest.TestCase):
                 self.assertIn(f"FLASH_UNSLOTH_{var} must be", out)
                 self.assertFalse(self.out.exists(), "a unit written all the same")
 
-    def test_the_requests_share_one_window_or_have_one_each(self):
-        """SHARED=1: one window of CTX the requests share (-kvu), which one may take whole, and requests that together
-        pass it all fail at once (llama.cpp's server-context.cpp). SHARED=0: a window of CTX for each, -c holding them
-        all and no -kvu, so that no request can make another fail. Either way one request's window is CTX, which
-        lanes.sh's llamacpp_window reads in the unit for opencode's limits (the cockpit's, in its own test)."""
-        for shared, slots, kv, c, rest in (("1", "4", "", 262144, "-np 4 -kvu"), ("0", "2", "", 524288, "-np 2"),
-                                           ("0", "4", "q8_0", 1048576, "-np 4 -ctk q8_0 -ctv q8_0")):
-            with self.subTest(shared=shared, slots=slots):
-                rc, out, cmd = self.staged_with(SHARED=shared, SLOTS=slots, KV=kv)
+    def test_each_request_has_a_window_of_its_own(self):
+        """SHARED=0: a window of CTX for each request, -c holding them all and no -kvu, so that no request can make
+        another fail, and one request's window is CTX, which lanes.sh's llamacpp_window reads in the unit for opencode's
+        limits (the cockpit's, in its own test). The installer's forms at the model's own window of 262,144, no YaRN."""
+        for slots, kv, c, rest in (("2", "", 524288, "-np 2"), ("4", "q8_0", 1048576, "-np 4 -ctk q8_0 -ctv q8_0"),
+                                   ("1", "", 262144, "-np 1")):
+            with self.subTest(slots=slots):
+                rc, out, cmd = self.staged_with(SHARED="0", SLOTS=slots, KV=kv, CTX="262144", YARN="")
                 self.assertEqual(rc, 0, out)
                 self.assertRegex(cmd, rf"-c {c} {rest}\s+-md ")
-                self.assertEqual("-kvu" in cmd.split(), shared == "1")
+                self.assertNotIn("-kvu", cmd.split())
                 said = subprocess.run(["bash", "-c", '. "$1"; llamacpp_window "$2"', "_", str(REPO / "lanes.sh"), str(self.out)],
                                       capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", "HOME": str(self.home)})
                 self.assertEqual(said.stdout.strip(), "262144", said.stderr)
-        # the lane's own: a window each, for two requests (2026-11-12)
-        self.assertEqual((PINS["FLASH_UNSLOTH_SHARED"], PINS["FLASH_UNSLOTH_SLOTS"]), ("0", "2"))
+        # the lane's own: two windows of 262,144, the KV cache in f16 (decision 1318, 2026-11-12)
+        self.assertEqual((PINS["FLASH_UNSLOTH_SHARED"], PINS["FLASH_UNSLOTH_SLOTS"], PINS["FLASH_UNSLOTH_CTX"],
+                          PINS["FLASH_UNSLOTH_YARN"], PINS["FLASH_UNSLOTH_KV"]), ("0", "2", "262144", "", ""))
+
+    def test_a_window_the_requests_share_is_refused_and_says_why(self):
+        # SHARED=1 (-kvu): llama-server stopped itself under load each time requests shared a window, four loads of four
+        # on 2026-11-12 with b12291 and with the pinned image b12316 ("common/common.cpp:1634: failed to remove sequence
+        # N with p0=..., p1=-1", llama.cpp issue 31656): the render refuses it, says why, and writes no unit
+        for slots in ("4", "2"):
+            with self.subTest(slots=slots):
+                rc, out, cmd = self.staged_with(SHARED="1", SLOTS=slots)
+                self.assertNotEqual(rc, 0, out)
+                self.assertIn("FLASH_UNSLOTH_SHARED=1 (one window the requests share, -kvu) is refused: llama-server "
+                              "stopped itself under load", out)
+                self.assertIn("failed to remove sequence", out)
+                self.assertEqual(cmd, "")
+                self.assertFalse(self.out.exists(), "a unit written all the same")
 
     def test_a_stage_with_no_gguf_in_the_cache_writes_no_unit(self):
         (self.snap / PART1_PATH).unlink()
@@ -285,6 +306,100 @@ class TheStagedUnit(unittest.TestCase):
         self.assertNotEqual(rc, 0, out)
         self.assertIn("the chat template could not be patched", out)
         self.assertFalse(self.out.exists(), "a unit naming a template that is not there")
+
+
+class TheWindowChosenAtInstall(unittest.TestCase):
+    """Decisions 1316 and 1318 (2026-11-12): 262,144 tokens for each of two requests by default, and, chosen at install
+    as FLASH_LOCAL_CONTEXT=1m is the FP4-Local lane's, FLASH_UNSLOTH_CONTEXT=1m for one request at a time with
+    1,048,576 (YaRN at four times, the KV cache in q8_0: three codes of three found in 985,296 tokens, 12.9 GiB
+    available at the lowest). The choice is kept for the Loads after, which stage the unit with none of the user's
+    environment, by the render that takes it and by --prepare, and the uninstall takes it away."""
+    setUp, tearDown, stage = TheStagedUnit.setUp, TheStagedUnit.tearDown, TheStagedUnit.stage
+    NATIVE = r"-c 524288 -np 2\s+-md "
+    ONE = r"-c 1048576 -np 1 -ctk q8_0 -ctv q8_0 --rope-scaling yarn --yarn-orig-ctx 262144 --rope-scale 4\s+-md "
+
+    def window(self):
+        r = subprocess.run(["bash", "-c", '. "$1"; llamacpp_window "$2"', "_", str(REPO / "lanes.sh"), str(self.out)],
+                           capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", "HOME": str(self.home)})
+        return r.stdout.strip()
+
+    def test_native_by_default_1m_when_asked_and_kept_for_the_loads_after(self):
+        choice = self.cfg / "flash-unsloth-context"
+        rc, out = self.stage()
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(exec_command(self.out.read_text()), self.NATIVE)
+        self.assertEqual((self.window(), choice.exists()), ("262144", False))
+        rc, out = self.stage(FLASH_UNSLOTH_CONTEXT="1m")
+        self.assertEqual(rc, 0, out)
+        cmd = exec_command(self.out.read_text())
+        self.assertRegex(cmd, self.ONE)
+        self.assertFalse({"-kvu", "--no-cache-idle-slots", "--cache-ram"} & set(cmd.split()), cmd)
+        self.assertEqual((self.window(), choice.read_text()), ("1048576", "1m\n"))
+        rc, out = self.stage()                                        # a Load: none of the user's environment
+        self.assertEqual((rc, self.window()), (0, "1048576"), out)
+        for back in ("native", ""):
+            with self.subTest(back=back):
+                self.assertEqual(self.stage(FLASH_UNSLOTH_CONTEXT="1m")[0], 0)
+                rc, out = self.stage(FLASH_UNSLOTH_CONTEXT=back)
+                self.assertEqual((rc, self.window(), choice.exists()), (0, "262144", False), out)
+                self.assertRegex(exec_command(self.out.read_text()), self.NATIVE)
+
+    def test_an_unknown_value_is_refused_and_changes_nothing(self):
+        self.assertEqual(self.stage(FLASH_UNSLOTH_CONTEXT="1m")[0], 0)
+        self.out.unlink()
+        rc, out = self.stage(FLASH_UNSLOTH_CONTEXT="2m")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("native (262,144 tokens for each of 2 requests at once, the default) or 1m (1,048,576 for one "
+                      "request)", out)
+        self.assertFalse(self.out.exists(), "a unit written all the same")
+        self.assertEqual((self.cfg / "flash-unsloth-context").read_text(), "1m\n")
+
+    def test_units_only_and_prepare_keep_the_choice_for_the_load(self):
+        # --units-only renders the unit (install_service), and its render keeps the choice; --prepare renders nothing
+        # and keeps it for the Load that does, as on the FP4-Local lane (second review of v1.45.2)
+        text = (REPO / "install-flash-unsloth.sh").read_text()
+        units = text[text.index('if [ "$MODE" = units ]; then'):]
+        self.assertIn("\n  install_service\n", units[:units.index("\nfi\n")])
+        service = text[text.index("install_service(){"):]
+        self.assertIn('render_unit "$RENDER"', service[:service.index("\n}\n")])
+        render = text[text.index("render_unit(){"):]
+        self.assertTrue(render[:render.index("\n}\n")].endswith("\n  keep_choice"))
+        parse = text[text.index('CONTEXT_GIVEN=""'):text.index("# The unit, rendered for this box")]
+        prepare = text[text.index('if [ "$MODE" = prepare ]; then'):]
+        prepare = prepare[:prepare.index("\nfi\n") + 4].replace("exit 0", ":")
+        where = re.search(r"^CONTEXT_CHOICE=.*$", text, re.M).group(0)
+        choice = self.cfg / "flash-unsloth-context"
+
+        def prepared(**env):
+            script = "\n".join(["set -euo pipefail", 'die(){ echo "die: $*"; exit 1; }', "step(){ :; }", "MODE=prepare",
+                                f'CONFIG_DIR="{self.cfg}"', where, parse, prepare])
+            r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                               env={"PATH": "/usr/bin:/bin", **env})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        prepared(FLASH_UNSLOTH_CONTEXT="1m")
+        self.assertEqual(choice.read_text(), "1m\n")
+        prepared()                                                    # one that names none keeps it
+        self.assertEqual(choice.read_text(), "1m\n")
+        prepared(FLASH_UNSLOTH_CONTEXT="native")
+        self.assertFalse(choice.exists())
+
+    def test_the_uninstall_takes_the_choice_away(self):
+        # the installer's own --uninstall, whole, with sudo, systemctl and docker stubs that write their calls down
+        (self.cfg / "flash-unsloth-context").write_text("1m\n")
+        (self.units / "qwen38-flash-unsloth.service").write_text("ExecStart=/bin/bash -c 'x'\n")
+        stubs, log = self.t / "bin", self.t / "calls.log"
+        stubs.mkdir()
+        for tool in ("sudo", "docker", "systemctl"):
+            (stubs / tool).write_text(f'#!/bin/bash\necho "{tool} $*" >> "{log}"\n'
+                                      + ('[ "$1" = is-enabled ] && exit 1\n' if tool == "systemctl" else "") + "exit 0\n")
+            (stubs / tool).chmod(0o755)
+        r = subprocess.run(["bash", str(REPO / "install-flash-unsloth.sh"), "--uninstall"], capture_output=True, text=True,
+                           timeout=60, env={"PATH": f"{stubs}:/usr/bin:/bin", "HOME": str(self.home),
+                                            "HF_CACHE": str(self.hf), "LANES_UNIT_DIR": str(self.units)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.cfg / "flash-unsloth-context").exists())
+        self.assertIn(f"sudo rm -f {self.units}/qwen38-flash-unsloth.service", log.read_text())
 
 
 class ThePatcherReadsAGguf(unittest.TestCase):
@@ -556,6 +671,108 @@ class TheSwitchAndThePins(unittest.TestCase):
         uninstall = (REPO / "uninstall.sh").read_text()
         for value in (PINS["FLASH_UNSLOTH_REPO"], PINS["FLASH_UNSLOTH_DRAFT_REPO"], PINS["FLASH_UNSLOTH_IMAGE"]):
             self.assertIn(f" {value}", uninstall)
+
+
+class TheLoadSetsOpencodeForTheWindow(unittest.TestCase):
+    """A Load of the lane gives opencode the pair of the window its unit runs: 262,144 tokens for each of its two
+    requests by default, 1,048,576 for one request in its 1M mode (decisions 1316 and 1318, 2026-11-12).
+    --add-providers adds a missing provider only, so the entry already there takes the pair too, as on the FP4-Local
+    lane (second review of v1.45.2): the switch kept 205,000 before, a window of 262,144's, whatever its unit ran.
+    switch-model.sh's own block runs here, on copies of the two configs, with a systemctl that answers nothing and a
+    sudo that is never reached."""
+
+    def setUp(self):
+        self.d = pathlib.Path(tempfile.mkdtemp(prefix="flu-load-oc-"))
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.cfg = self.d / "cfg"
+        self.home = self.d / "home"
+        (self.home / ".config" / "opencode").mkdir(parents=True)
+        self.cfg.mkdir()
+        (self.cfg / "api-key").write_text("k\n")
+        self.bin = self.d / "bin"
+        self.bin.mkdir()
+        for tool in ("systemctl", "sudo"):
+            (self.bin / tool).write_text("#!/bin/sh\nexit 1\n")
+            (self.bin / tool).chmod(0o755)
+        gen = subprocess.run([sys.executable, str(REPO / "oc-flash-unsloth.py"), "http://127.0.0.1:30001/v1",
+                              str(self.cfg / "api-key"), "205000", "32000",
+                              "Qwen3.8-Flash-Next Unsloth UD-Q4_K_XL + DFlash2 (local, 262K)"],
+                             capture_output=True, text=True, check=True)
+        base = {"model": "qwen38/qwen3.8-27b", "compaction": {"preserve_recent_tokens": 46000, "prune": False},
+                "provider": {"qwen38": {"models": {"qwen3.8-27b": {
+                    "name": "x", "limit": {"context": 547000, "input": 547000, "output": 182000}}}},
+                             **json.loads(gen.stdout)["provider"]}}
+        self.configs = (self.cfg / "opencode.json", self.home / ".config" / "opencode" / "opencode.json")
+        for c in self.configs:
+            c.write_text(json.dumps(base, indent=2) + "\n")
+        text = (REPO / "switch-model.sh").read_text()
+        start = text.rindex('  if [ -f "$CONFIG_DIR/opencode.off" ]; then', 0, text.index("FLU_OC_SUM="))
+        end = text.index('  echo "Clients reach it through the proxy on :30001 with the box\'s key, as model qwen3.8-flash-next-unsloth."')
+        self.block = text[start:end].replace("/etc/systemd/system/qwen38-keepalive.service", str(self.d / "keepalive.service"))
+
+    def load(self, form):
+        unit = self.d / "qwen38-flash-unsloth.service"
+        unit.write_text(f"ExecStart=/bin/bash -c 'exec docker run x \\\n    {form}  \\\n    -md y'\n")
+        script = "\n".join(["set -uo pipefail", f'REPO_DIR="{REPO}"', f'CONFIG_DIR="{self.cfg}"', f'. "{REPO}/lanes.sh"',
+                            f'FLASH_UNSLOTH_UNIT="{unit}"', self.block])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+                           env={"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.home)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("NOTE", r.stdout + r.stderr)
+        return [json.loads(c.read_text()) for c in self.configs]
+
+    def test_a_load_to_its_1m_window_and_back_moves_the_limits_of_the_entry_already_there(self):
+        for form, ctx, label in (("-c 1048576 -np 1 -ctk q8_0 -ctv q8_0 --rope-scaling yarn", 830000, "(local, 1M)"),
+                                 ("-c 524288 -np 2", 205000, "(local, 262K)"),
+                                 ("-c 1048576 -np 1 -ctk q8_0 -ctv q8_0 --rope-scaling yarn", 830000, "(local, 1M)")):
+            keep = int(subprocess.run(["bash", str(REPO / "oc-limits.sh"), "--preserve", str(ctx)],
+                                      capture_output=True, text=True, check=True).stdout)
+            for c in self.load(form):
+                with self.subTest(form=form):
+                    m = c["provider"]["flash-unsloth"]["models"]["qwen3.8-flash-next-unsloth"]
+                    self.assertEqual(m["limit"], {"context": ctx, "input": ctx, "output": 32000})
+                    self.assertTrue(m["name"].endswith(label), m["name"])
+                    self.assertEqual(c["model"], "flash-unsloth/qwen3.8-flash-next-unsloth")
+                    self.assertEqual(c["compaction"]["preserve_recent_tokens"], keep)
+
+
+class TheInstallSetsTheUsersOpencodeForTheWindow(unittest.TestCase):
+    """install.sh's own blocks: the user's opencode config, whose entry --add-providers left as it was, gets the pair of
+    the lane's window, 830,000 and 32,000 in its 1M mode (2026-11-12), as the FP4-Local lane's gets its own, and
+    FLASH_UNSLOTH_CONTEXT is not read there, which would have reached the unit and not the clients sized before it
+    (FLASH_LOCAL_CONTEXT's reason, second review of v1.45.2)."""
+    TEXT = (REPO / "install.sh").read_text()
+
+    def test_the_users_config_takes_the_pair_of_its_window(self):
+        start = self.TEXT.index('if [ -f "$OC_USER_CFG" ]; then\n  if [ "${LANE:-27b}" = "flash" ]; then')
+        block = self.TEXT[start:self.TEXT.index("# The default model and the served entry's picker name follow the install", start)]
+        d = pathlib.Path(tempfile.mkdtemp(prefix="flu-install-oc-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        cfg = d / "opencode.json"
+        cfg.write_text(json.dumps({"provider": {
+            "qwen38": {"models": {"qwen3.8-27b": {"limit": {"context": 547000, "input": 547000, "output": 182000}}}},
+            "flash-unsloth": {"models": {"qwen3.8-flash-next-unsloth": {
+                "limit": {"context": 205000, "input": 205000, "output": 32000}}}}}}, indent=2) + "\n")
+        script = "\n".join(["set -uo pipefail", f'REPO_DIR="{REPO}"', f'OC_USER_CFG="{cfg}"', "LANE=27b",
+                            "OC_CTX=547000 OC_OUT=182000 OC_KEEP=205000 CONTEXT_MODE=1m _ENV_CONTEXT_MODE= MEM_CLASS=128",
+                            f'SGL_UNIT_PATH="{d}/none.service"', "OC_FLASH_LOCAL=0 OC_FLASH_LOCAL_CTX= OC_FLASH_LOCAL_OUT=",
+                            "OC_FLASH_UNSLOTH=1 OC_FLASH_UNSLOTH_CTX=830000 OC_FLASH_UNSLOTH_OUT=32000", block])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+                           env={"PATH": "/usr/bin:/bin", "HOME": str(d)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        c = json.loads(cfg.read_text())
+        self.assertEqual(c["provider"]["flash-unsloth"]["models"]["qwen3.8-flash-next-unsloth"]["limit"],
+                         {"context": 830000, "input": 830000, "output": 32000})
+
+    def test_flash_unsloth_context_is_not_read_by_the_install(self):
+        start = self.TEXT.index('if [ -n "${FLASH_UNSLOTH_CONTEXT+set}" ]; then')
+        block = self.TEXT[start:self.TEXT.index("\nfi\n", start) + 4]
+        self.assertLess(start, self.TEXT.index('OC_FLASH_UNSLOTH_PAIR="$('))
+        self.assertLess(start, self.TEXT.index('install-flash-unsloth.sh" "$(side_mode'))
+        r = subprocess.run(["bash", "-c", block + 'echo "after=${FLASH_UNSLOTH_CONTEXT-unset}"'], capture_output=True,
+                           text=True, timeout=30, env={"PATH": "/usr/bin:/bin", "FLASH_UNSLOTH_CONTEXT": "1m"})
+        self.assertIn("FLASH_UNSLOTH_CONTEXT=1m ./install-flash-unsloth.sh --units-only", r.stdout)
+        self.assertIn("after=unset", r.stdout)
 
 
 class TheProxyKnowsLlamaCpp(unittest.TestCase):

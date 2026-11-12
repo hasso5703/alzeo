@@ -197,7 +197,9 @@ class ItsWindow(Base):
         # the engine table says one request's, as lanes.sh's llamacpp_window does for opencode
         for text, want in (("x -c 262144 -np 4 -kvu  \\\n    -md y", 262144), ("x -c 524288 -np 2  \\\n    -md y", 262144),
                            ("x -c 1048576 -np 4 -ctk q8_0 -ctv q8_0 \\\n", 262144), ("x -c 262144 -np 1 \\\n", 262144),
-                           ("#   -c 999 -np 9, a comment\nx -c 262144 -np 4 -kvu", 262144), ("x --alias y", None)):
+                           ("#   -c 999 -np 9, a comment\nx -c 262144 -np 4 -kvu", 262144), ("x --alias y", None),
+                           # its 1M mode, one request at a time (FLASH_UNSLOTH_CONTEXT=1m, 2026-11-12)
+                           ("x -c 1048576 -np 1 -ctk q8_0 -ctv q8_0 --rope-scaling yarn \\\n    -md y", 1048576)):
             with self.subTest(text=text):
                 self.assertEqual(self.ck.llamacpp_window(text), want)
 

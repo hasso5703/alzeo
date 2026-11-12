@@ -100,6 +100,7 @@ its body. Bodies are JSON in UTF-8: another encoding gets a 415.
 
 Served model names: `qwen3.8-27b` (27B lane, both context modes),
 `qwen3.8-flash-next` (flash lane), `qwen3.8-flash-next-fp4` (Qwen3.8 Flash-Next FP4-Local lane),
+`qwen3.8-flash-next-unsloth` (Qwen3.8 Flash-Next Unsloth GGUF lane),
 `kolibri-1` (Kolibri lane), `nemotron-3.5-bolt` (Nemotron lane), `nemotron-3.5-super-vl`
 (Nemotron Super lane) and `ornith-1.5-122b` (Ornith lane). Send the name, not the checkpoint path. A client set up for one lane
 keeps working on another: SGLang answers any name, and on the vLLM lanes, whose vLLM
@@ -121,6 +122,12 @@ every box until then). `none` turns the reasoning off there too (the proxy says 
 v6.43). Its reasoning comes in the `reasoning` field (vLLM's name), it reads images sent inside the
 request (a data URL) and fetches no URL, and its window is 262,144 tokens (1,048,576 with `FLASH_LOCAL_CONTEXT=1m`, docs/flash-local-lane.md). `/v1/systemone` is not
 served on it: the endpoint says which lanes serve it.
+
+The Qwen3.8 Flash-Next Unsloth GGUF lane (llama.cpp, [docs/flash-unsloth-lane.md](flash-unsloth-lane.md)) serves the
+flash model with its GGUF's template and the Qwen lanes' fixes: the same levels, `lean` by default, `none` turning the
+reasoning off, and its reasoning in `reasoning_content`. It takes text only. Its window is 262,144 tokens for each of
+two requests at once (1,048,576 for one request at a time with `FLASH_UNSLOTH_CONTEXT=1m`). `/v1/systemone` is not
+served on it.
 
 The Nemotron lanes (vLLM, [docs/nemotron-lane.md](nemotron-lane.md) and
 [docs/nemotron-super-lane.md](nemotron-super-lane.md)) also say their
