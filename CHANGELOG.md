@@ -9,8 +9,8 @@ box). Tokens are proposed by llama.cpp's n-gram lookup, then by ggml-org's GGUF 
 step, kept from a probability of 0.5 and checked by rejection sampling. It serves on the text port behind the proxy and
 the box's key as `qwen3.8-flash-next-unsloth`, OpenAI and Anthropic dialects alike, text only, to two requests at once,
 each with a window of its own of the 262,144 tokens the model was trained for (`-c 524288 -np 2`, the KV cache in f16;
-Hasan's decision 1318, 2026-11-12), or, with `FLASH_UNSLOTH_CONTEXT=1m` chosen at install as `FLASH_LOCAL_CONTEXT=1m` is
-the FP4-Local lane's and kept for the Loads after, to one request at a time with a window of 1,048,576 (YaRN at four
+Hasan's decision 1318, 2026-11-12), or, with `FLASH_UNSLOTH_CONTEXT=1m` given to its installer (`./install-flash-unsloth.sh
+--units-only`) as `FLASH_LOCAL_CONTEXT=1m` is the FP4-Local lane's, and kept for the Loads after, to one request at a time with a window of 1,048,576 (YaRN at four
 times, the KV cache in q8_0). Its n-gram table (26.8 GiB) stays on the disk, read row by row as the tokens need it
 (`--lazy-mode on`): without it the GB10, an integrated GPU, loads the table with the weights, and the box's memory guard
 stopped the load at 5 GiB free. Its weights are copied into the GPU's memory (`--load-mode none`): read in place in the
@@ -25,11 +25,12 @@ code. On b12282's image, measured first, the lookup slowed the draft down (46.9,
 58.8, 31.3 and 52.0 with the draft alone and 27.9, 27.7, 27.3 and 27.4 with no draft), hence b12316. Two requests at
 once gave 63.2 tok/s in all, 34.2 each, against 54.2 for one (b12291 built on the box): each has a window of its own, so
 that neither can make the other fail, and a third waits its turn. A window shared by several requests (`-kvu`) is
-refused (`FLASH_UNSLOTH_SHARED=1` stops the installer, which says why): meant to serve more requests at once on more
-context, it stopped llama-server under load four times of four on 2026-11-12, with b12291 built on the box and with the
-pinned image b12316 ("common/common.cpp:1634: failed to remove sequence N with p0=..., p1=-1", an abort in
+refused (the installer refuses its setting `FLASH_UNSLOTH_SHARED` at 1 and says why): meant to serve more requests at
+once on more context, it stopped llama-server under load in four of the nine runs that shared a window on 2026-11-12,
+with b12291 built on the box and with the pinned image b12316 ("common/common.cpp:1634: failed to remove sequence N with p0=..., p1=-1", an abort in
 `common_memory::seq_rm` from `post_decode`): llama.cpp's open issue 31656, a draft's rollback on this hybrid model's
-recurrent state, which a shared window's batches lose. Before it stopped, four requests sharing 524,288 tokens left 22
+recurrent state, which a shared window's batches lose. The five other runs, salvos of 1, 4 and 8 short requests, ended
+well: the abort is intermittent. Before it stopped, four requests sharing 524,288 tokens left 22
 GiB to the box at ready and decoded 72.6 tok/s in all (under a GPU clock cap of 2,200 MHz); four sharing 1,048,576 left
 the box under 6 GiB. It comes back when llama.cpp fixes it. Four windows with the KV cache in q8_0 left 10 GiB to the
 box after the probes: not taken. The whole window is read: three codes of three found in a prompt of 255,529 tokens. A
@@ -86,6 +87,17 @@ reasoning effort of `none` in `chat_template_kwargs`, which llama-server hands t
 refuses, becomes `enable_thinking` false as on the other Qwen lanes. System One is refused there with the lanes that
 answer it. The pair reads a llama.cpp unit's name, checkpoint and slots from its command (`--alias`, the snapshot of its
 `-m`, `-np`), as it reads a vLLM unit's.
+
+**A Load sets the clients for the window it starts.** The FP4-Local lane (since v1.45.2) and this one let a window be
+chosen at their installer (`FLASH_LOCAL_CONTEXT=1m`, `FLASH_UNSLOTH_CONTEXT=1m`), and switch-model.sh alone sets
+opencode, pi and `claude-local` for that window. The cockpit's Load of such a lane as the boot lane only started or
+restarted its unit, so the window reached the engine and not the clients: back from 1M to 262,144 they kept a context
+of 840,000 tokens (830,000 here) where the proxy refuses a prompt past 250,000, and on the way to 1M they kept 205,000
+(found in the code review of this version). That Load now sets the clients first, with the step every other Load of
+the lane already has (it verifies the lane's files and restarts nothing), then starts or restarts the lane. A Load that
+starts nothing adds nothing, and the other lanes' Loads are as they were. The page's tests cover each state the Load
+meets, and fail on the code before. `./install.sh` now says, as switch-model.sh does, when a config edited by hand
+refuses the pair of either lane: it kept the old pair without a word.
 
 ## v1.47.0 (2026-11-12): a GPU clock cap in the cockpit's Machine view: about the same tokens per second for fewer watts and degrees
 

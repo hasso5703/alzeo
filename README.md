@@ -638,8 +638,8 @@ quantization (UD-Q4_K_XL: 76.9 GiB of weights), served by llama.cpp's own server
 pinned by digest, with llama.cpp's n-gram lookup and ggml-org's DFlash2 draft (Q8_0) proposing tokens. The model's
 n-gram table (26.8 GiB) stays on the disk and is read row by row as the tokens need it (`--lazy-mode on`), so the lane
 holds 95.3 GiB of the GPU's memory at ready and leaves 20 GiB to the box, with two requests at once, each with a window
-of its own of 262,144 tokens; `FLASH_UNSLOTH_CONTEXT=1m` at install gives one request at a time a window of 1,048,576
-tokens instead (YaRN at four times, 16.1 GiB left to the box at ready). It serves on the text port behind the same proxy
+of its own of 262,144 tokens; `FLASH_UNSLOTH_CONTEXT=1m ./install-flash-unsloth.sh --units-only` gives one request at a
+time a window of 1,048,576 tokens instead, from its next Load (YaRN at four times, 16.1 GiB left to the box at ready). It serves on the text port behind the same proxy
 and key, as model `qwen3.8-flash-next-unsloth`, OpenAI or Anthropic dialect alike, text only (the GGUF's vision
 projector is not loaded). Its chat template is the GGUF's own with the same fixes as the other Qwen lanes', `lean` its
 default. It needs 117 GB (112 for its files, 4.5 for the image), installed on demand like the others:
@@ -661,7 +661,7 @@ The median of three passes, and each text's first pass with the n-grams, whose p
 image the n-grams slowed the draft down (46.9 / 43.9 / 22.9 / 116.2 tok/s), hence b12316. Two requests at once gave 63.2
 tok/s in all (34.2 each) against 54.2 for one (llama.cpp b12291 built on the box, the DFlash2 draft alone), each with a
 window of its own, so that neither can make the other fail. A window shared by several requests (`-kvu`) is refused for
-now: llama-server stopped itself under load each time requests shared one, four loads of four on 2026-11-12 (llama.cpp's
+now: llama-server stopped itself under load in four of the nine runs that shared one on 2026-11-12 (llama.cpp's
 open issue 31656, which the lane page details). The whole window is read: three codes of three found in a prompt of
 255,529 tokens; with YaRN, 524,288 tokens is an option, and the 1M mode's 1,048,576 too (the KV cache in q8_0: three
 codes of three in 985,296 tokens). GSM8K 98.4 % (250 questions) and HumanEval 99.4 % (164 problems) at the `medium`

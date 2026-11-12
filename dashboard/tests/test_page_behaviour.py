@@ -2074,8 +2074,67 @@ class ALoadBringsBackWhatALaneLacks(unittest.TestCase):
         self.assertIn("Fetches what its checkpoint lacks and copies its n-gram table again", r["desc"])
         self.assertNotIn("Verifies", r["desc"])
 
-    def test_a_whole_boot_lane_is_only_started(self):
-        self.assertEqual(self.steps(True), ["unit:start"])
+    def test_a_whole_boot_lane_has_its_clients_set_then_is_started(self):
+        # its clients follow the window its unit starts with: set first (TheLoadOfABootLaneSetsTheClientsForItsWindow)
+        self.assertEqual(self.steps(True), ["switch", "unit:start"])
+
+
+class TheLoadOfABootLaneSetsTheClientsForItsWindow(unittest.TestCase):
+    """The FP4-Local and Unsloth GGUF lanes' clients follow the window their unit starts with (FLASH_LOCAL_CONTEXT=1m,
+    FLASH_UNSLOTH_CONTEXT=1m), which switch-model.sh alone sets. The Load of such a lane as the boot lane started or
+    restarted its unit alone, so a window chosen with --units-only reached the engine and not opencode, pi or
+    claude-local: back from 1M they kept 830,000 tokens where the proxy refuses a prompt past 250,000 (code review of
+    v1.48.0, 2026-11-12; the FP4-Local lane's since v1.45.2). Its Load sets them first; a Load that starts nothing adds
+    nothing, and the other lanes' Loads are as they were."""
+
+    def steps(self, unit, target, active, state, owed=False, sglang="stopped"):
+        body = r"""
+        const U = JSON.parse(JSON.stringify(UNITS));
+        U.units['qwen38-sglang.service'] = {active: '@SA@', enabled: 'disabled'};
+        U.units['@U@'] = {active: '@A@', enabled: 'enabled'};
+        feed({units: U, lanes_ready: {'@T@': true}, lanes_startable: {'@T@': true},
+              lifecycle: life({'qwen38-sglang.service': eng('@SS@'), '@U@': eng('@S@', {target: '@T@'})}),
+              update: @UP@});
+        report(laneJourneySteps('@T@').map(s => [s.name + (s.params.verb ? ':' + s.params.verb + ' ' + s.params.unit : ''), s.title]));
+        """
+        up = "{stale_engines: {'%s': 'Its unit changed (what it runs and how)'}}" % unit if owed else "{}"
+        for k, v in (("@SA@", "active" if sglang == "ready" else "inactive"), ("@SS@", sglang), ("@U@", unit),
+                     ("@A@", active), ("@T@", target), ("@S@", state), ("@UP@", up)):
+            body = body.replace(k, v)
+        return run(self, body)
+
+    LANES = (("qwen38-flash-local.service", "flash-local", "Qwen3.8 Flash-Next FP4-Local"),
+             ("qwen38-flash-unsloth.service", "flash-unsloth", "Qwen3.8 Flash-Next Unsloth GGUF"))
+
+    def test_its_unit_changed_while_it_serves_sets_the_clients_then_restarts_it(self):
+        for unit, target, name in self.LANES:
+            with self.subTest(target=target):
+                r = self.steps(unit, target, "active", "ready", owed=True)
+                self.assertEqual([s for s, _ in r], ["switch", "unit:restart " + unit])
+                self.assertEqual(r[0][1], f"Set the clients for {name}’s window")
+                self.assertEqual(r[1][1], f"Restart {name} on what the update installed")
+
+    def test_stopped_it_sets_the_clients_then_starts_it(self):
+        for unit, target, _ in self.LANES:
+            with self.subTest(target=target):
+                self.assertEqual([s for s, _ in self.steps(unit, target, "inactive", "stopped")],
+                                 ["switch", "unit:start " + unit])
+
+    def test_another_lane_serving_is_stopped_after_the_clients_are_set(self):
+        for unit, target, _ in self.LANES:
+            with self.subTest(target=target):
+                self.assertEqual([s for s, _ in self.steps(unit, target, "inactive", "stopped", sglang="ready")],
+                                 ["switch", "unit:stop qwen38-sglang.service", "unit:start " + unit])
+
+    def test_serving_with_nothing_owed_it_adds_nothing(self):
+        # no restart for nothing: the Load of the lane that serves as installed starts no step
+        for unit, target, _ in self.LANES:
+            with self.subTest(target=target):
+                self.assertEqual(self.steps(unit, target, "active", "ready"), [])
+
+    def test_a_lane_whose_clients_do_not_follow_a_window_is_only_started(self):
+        self.assertEqual([s for s, _ in self.steps("qwen38-kolibri.service", "kolibri", "inactive", "stopped")],
+                         ["unit:start qwen38-kolibri.service"])
 
 
 class TheLastFiveMinutesSayTheEnginesCounters(unittest.TestCase):

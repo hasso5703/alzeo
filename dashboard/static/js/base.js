@@ -196,7 +196,7 @@ const TARGET_NOTE = {
   'nemotron-super': 'NVIDIA’s Nemotron 3.5 Super VL in NVFP4, served as its model card says for a DGX Spark: its LiLiCorr drafter, a window of 1,048,576 tokens, the Mamba state in float16 with stochastic rounding, temperature 1.0, top_p 0.95, reasoning on (off, efficient or full per request), in the Nemotron 3.5 Bolt lane’s vLLM image. It reads images and video. Measured on this box: 70 tokens/s alone on code, 31 on prose, its whole window 1.1 to 1.3 times over in its cache. The first switch downloads about 77 GB.',
   'flash-local': 'NVIDIA’s own FP4 build of the flash model, served as its model card says for a DGX Spark: vLLM with b12x, its experts and its n-gram table in NVFP4 after a quantization-aware distillation from the full precision (GPQA Diamond 91.5 % against 92.2 % on NVIDIA’s card), an MTP head drafting 4 tokens, 262,144 tokens of context and a KV cache of about 920,000 tokens, reasoning on at lean as on the other Qwen lanes unless a request asks for another level (xhigh by default with FLASH_LOCAL_EFFORT=xhigh). Its table is read at every token: with the HF cache on another disk, its first Load copies the table’s files (32 GB) beside your home directory. The first boot tunes b12x’s kernels for this GPU, about 17 min; the next ones take about 6. The first switch downloads about 102 GB.',
   'ornith-122b': 'Ornith AI’s Ornith 1.5 122B (MIT) in its authors’ NVFP4 build, served by vLLM with b12x in the Qwen3.8 Flash-Next FP4-Local lane’s image: its experts and output head in NVFP4, its projections in FP8, an MTP head drafting 2 tokens, 1,048,576 tokens of context (its own 262,144 stretched four times with YaRN), temperature 0.6, top_p 0.95, top_k 20, reasoning on (off with effort none or minimal). It reads images and video. The first switch downloads about 78 GB.',
-  'flash-unsloth': 'Unsloth’s dynamic GGUF of the flash model (UD-Q4_K_XL, 76.9 GiB of weights), served by llama.cpp’s own server with its n-gram lookup and ggml-org’s DFlash2 draft (Q8_0), its weights copied into the GPU’s memory and its n-gram (PLE) table (26.8 GiB) read from the disk as the tokens need it: 262,144 tokens of context for each of two requests at once (1,048,576 for one request at a time with FLASH_UNSLOTH_CONTEXT=1m at install), the model card’s sampling (temperature 1.0, top_p 0.95, top_k 20), reasoning on at lean as on the other Qwen lanes unless a request asks for another level. Measured on this box at that sampling, one request, on its image (llama.cpp b12316, 2026-11-12, each text’s first pass): 51.8 tokens/s on code, 56.9 in reasoning, 31.5 on prose and 123.7 on a rewrite of code (27.9, 27.7, 27.3 and 27.4 without the lookup and the draft, on the image before it); two requests at once, 63.2 tokens/s in all. The first switch downloads about 112 GB.'};
+  'flash-unsloth': 'Unsloth’s dynamic GGUF of the flash model (UD-Q4_K_XL, 76.9 GiB of weights), served by llama.cpp’s own server with its n-gram lookup and ggml-org’s DFlash2 draft (Q8_0), its weights copied into the GPU’s memory and its n-gram (PLE) table (26.8 GiB) read from the disk as the tokens need it: 262,144 tokens of context for each of two requests at once (1,048,576 for one request at a time with FLASH_UNSLOTH_CONTEXT=1m given to its installer), the model card’s sampling (temperature 1.0, top_p 0.95, top_k 20), reasoning on at lean as on the other Qwen lanes unless a request asks for another level. Measured on this box at that sampling, one request, on its image (llama.cpp b12316, 2026-11-12, each text’s first pass): 51.8 tokens/s on code, 56.9 in reasoning, 31.5 on prose and 123.7 on a rewrite of code (27.9, 27.7, 27.3 and 27.4 without the lookup and the draft, on the image before it); two requests at once, 63.2 tokens/s in all. The first switch downloads about 112 GB.'};
 // What installs a lane this box does not have. Since v1.20 a plain ./install.sh installs
 // every lane, so one missing here was left out (a --no-<lane> on the last run) or did not fit:
 // --with-<lane> installs it beside the lane that serves, which keeps serving. A text lane comes with
@@ -784,6 +784,15 @@ const LANE_RUNTIME = {flash: 'its SGLang image (about 16 GB to download), its ch
 const SIDE_LANE = {[IMAGE_UNIT]: 'image', [VIDEO_UNIT]: 'video', [KOLIBRI_UNIT]: 'kolibri', [NEMOTRON_UNIT]: 'nemotron',
                    [NEMOTRON_SUPER_UNIT]: 'nemotron-super', [FLASH_LOCAL_UNIT]: 'flash-local', [ORNITH_UNIT]: 'ornith-122b',
                    [FLASH_UNSLOTH_UNIT]: 'flash-unsloth', [UFLASH]: 'flash', [U27]: '27b'};
+// The lanes whose clients follow the window their unit starts with (FLASH_LOCAL_CONTEXT=1m, FLASH_UNSLOTH_CONTEXT=1m):
+// switch-model.sh sets opencode, pi and claude-local for that window, and nothing else does. The Load of such a lane as
+// the boot lane started or restarted its unit alone, so a window chosen with --units-only reached the engine and not
+// the clients: back from 1M they kept a context of 830,000 tokens where the proxy refuses a prompt past 250,000, and
+// on the way to 1M they kept 205,000 (code review of v1.48.0, 2026-11-12; the FP4-Local lane's since v1.45.2). Its Load
+// now sets them first, with the step that sets them at every other Load, and a Load that starts nothing adds nothing.
+const WINDOW_CLIENTS = new Set([FLASH_LOCAL_UNIT, FLASH_UNSLOTH_UNIT]);
+const clientsStep = (unit, target) => ({name: 'switch', params: {target}, title: `Set the clients for ${LANE_NAME[unit]}’s window`,
+  desc: 'Verifies its files and sets opencode, pi and claude-local for the window its unit starts with. Nothing restarts.'});
 function laneJourneySteps(target){
   const unit = TARGET_UNIT(target);
   const steps = [];
@@ -798,7 +807,8 @@ function laneJourneySteps(target){
   // asked for (found in review, 2026-10-17). The lane's card asks the same of it (lanes.js).
   const sv0 = servingEngine();
   if (sv0 && sv0[0] === unit && laneTarget(unit) === target && updateOwed(unit))
-    return steps.concat([{name: 'unit', params: {verb: 'restart', unit}, title: `Restart ${LANE_NAME[unit]} on what the update installed`,
+    return steps.concat(WINDOW_CLIENTS.has(unit) && bootUnit() === unit ? [clientsStep(unit, target)] : [],
+                        [{name: 'unit', params: {verb: 'restart', unit}, title: `Restart ${LANE_NAME[unit]} on what the update installed`,
              desc: `It answers again in ${readyIn(unit)}.` + (unit === IMAGE_UNIT || unit === VIDEO_UNIT ? ' A generation in flight is lost.' : '')}]);
   const serving = servingEngine();
   // none enabled: the switch step makes this one the boot lane, as it does from any other
@@ -808,6 +818,7 @@ function laneJourneySteps(target){
   // switch, which fetches and copies them, even as the boot lane already: its Load started it
   // alone and it failed again on the same missing file (found in review, 2026-10-20)
   const whole = !lane || (F.lanesStartable || {})[lane] !== false;
+  const switchAt = steps.length;
   if (enabled !== unit || (curTarget && curTarget !== target) || (!curTarget && LANE_TARGETS[unit].length > 1 && target !== LANE_TARGETS[unit][0])
       || !whole)
     // for a boot lane that lacks a file, the step fetches or copies it: up to 102 GB, not a check
@@ -816,6 +827,7 @@ function laneJourneySteps(target){
       desc: whole ? 'Verifies the checkpoint and makes this lane the one enabled at boot. Nothing restarts.'
         : 'Fetches what its checkpoint lacks' + (unit === FLASH_LOCAL_UNIT ? ' and copies its n-gram table again (up to 102 GB to fetch, 32 GB to copy)' : '')
           + ', and makes this lane the one enabled at boot. Nothing restarts.'});
+  const pointed = steps.length > switchAt;
   if (serving && serving[0] !== unit)
     steps.push({name: 'unit', params: {verb: 'stop', unit: serving[0]}, title: `Stop ${laneLabel(serving[0])}`,
       desc: serving[0] === IMAGE_UNIT || serving[0] === VIDEO_UNIT ? 'A generation in flight is lost.' : 'Clients on :30001 see the engine unavailable until the next one answers.'});
@@ -838,6 +850,9 @@ function laneJourneySteps(target){
       desc: `It answers again in ${readyIn(unit)}.` + (unit === IMAGE_UNIT || unit === VIDEO_UNIT ? ' A generation in flight is lost.' : '')});
   else if (!serving || serving[0] !== unit)
     steps.push({name: 'unit', params: {verb: 'start', unit}, title: `Start ${LANE_NAME[unit]}`, desc: `It loads and answers in ${readyIn(unit)}.`});
+  // a boot lane whose clients follow its window, started or restarted: they are set first, where its switch would be
+  if (WINDOW_CLIENTS.has(unit) && !pointed && steps.length && steps[steps.length - 1].params.unit === unit)
+    steps.splice(switchAt, 0, clientsStep(unit, target));
   return steps;
 }
 // What an update owes the engine of this unit, in words, or null (cockpit.py, stale_engines).

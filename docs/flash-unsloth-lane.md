@@ -238,11 +238,13 @@ computed again, and the box kept 24 GiB at ready and 16.1 at the lowest (variant
 ### One window shared by several requests: refused for now
 
 It was meant to serve more requests at once on more context: up to four requests sharing one window (`-kvu`) of
-524,288 or 1,048,576 tokens by YaRN (Hasan's decisions 1313 to 1317, 2026-11-12). Each time requests shared a window
-under load, llama-server stopped itself, four loads of four that day, with b12291 built on the box and with the pinned
-image b12316: "common/common.cpp:1634: failed to remove sequence N with p0=..., p1=-1", an abort in
+524,288 or 1,048,576 tokens by YaRN (Hasan's decisions 1313 to 1317, 2026-11-12). Of the nine runs where requests
+shared a window that day, llama-server stopped itself under load in four, with b12291 built on the box and with the
+pinned image b12316: "common/common.cpp:1634: failed to remove sequence N with p0=..., p1=-1", an abort in
 `common_memory::seq_rm` called from `post_decode`, after 4 minutes of GSM8K at 8 requests, at a salvo of 8 requests,
-after 106 s of GSM8K, and on the image after a first salvo of 8 had passed. It is llama.cpp's open issue
+after 106 s of GSM8K, and on the image after a first salvo of 8 had passed. The five others, salvos of 1, 4 and 8 short requests of 3 to 5
+minutes each, ended well: the abort is intermittent, and a form that may stop under its users' load is not served. It
+is llama.cpp's open issue
 [31656](https://github.com/ggml-org/llama.cpp/issues/31656): a draft's rejected tokens are rolled back from this hybrid
 model's per-token recurrent snapshots (`llama_memory_recurrent::seq_rm`), which a sequence loses when `find_slot` moves
 its cell between the parts of a batch, and a shared window splits a batch out of the sequences' order
@@ -257,7 +259,8 @@ it stopped, all under the GPU clock cap of 2,200 MHz (the memory does not depend
 | 1,048,576 by YaRN at four times, the KV cache in q8_0 | 5 to 11 GiB, then under 6 | | | the study's memory guard |
 | the same, `--cache-ram 1024` | 11.2 GiB, 8.3 | 38.1 tok/s | 59.5 | short probes only |
 
-The installer refuses `FLASH_UNSLOTH_SHARED=1` and says why. The form comes back when llama.cpp fixes the rollback
+The installer refuses its setting `FLASH_UNSLOTH_SHARED` at 1 (a line of the installer, as its other settings are:
+the environment does not set it) and says why. The form comes back when llama.cpp fixes the rollback
 (its pull request 31669 reworks it), measured again then.
 
 ## Memory
@@ -320,8 +323,8 @@ The choice is kept for the Loads after (a Load from the cockpit stages the unit 
 `./install.sh` does not read `FLASH_UNSLOTH_CONTEXT`, and says so.
 
 At 1M the proxy relays a prompt up to 92 % of the window (964,689 tokens), and the Load gives opencode, pi and
-`claude-local` a context of 830,000 tokens and 32,000 for the answer (the FP4-Local lane's rule at its 1M: the window
-less 10 % holds both), and the cockpit's Lanes and Now views say 1M tokens of context. A second request waits until
+`claude-local` a context of 830,000 tokens and 32,000 for the answer (the FP4-Local lane's rule at its 1M: the proxy's
+share of the window, 92 %, less 10 % holds both, 830,000 + 32,000 = 862,000 <= 868,220), and the cockpit's Lanes and Now views say 1M tokens of context. A second request waits until
 the first ends. TODO(measure): the quality of the answers under YaRN at four times.
 
 ## What it does not have

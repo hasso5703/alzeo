@@ -128,9 +128,9 @@ class TheStagedUnit(unittest.TestCase):
                       f"{DRAFT_PATH} ", unit)
         self.assertIn(f"-v {self.hf}:/root/.cache/huggingface:ro", unit)
         self.assertIn("--alias qwen3.8-flash-next-unsloth", unit)
-        # -c holds a window for each request, or the one they share (FLASH_UNSLOTH_SHARED)
+        # -c holds a window for each request (a window the requests share is refused, decision 1318)
         slots, ctx = int(PINS["FLASH_UNSLOTH_SLOTS"]), int(PINS["FLASH_UNSLOTH_CTX"])
-        whole = ctx if PINS["FLASH_UNSLOTH_SHARED"] == "1" or slots == 1 else ctx * slots
+        whole = ctx * slots
         self.assertIn(f"-c {whole} -np {slots} ", unit)
         self.assertIn(f"--spec-type {PINS['FLASH_UNSLOTH_SPEC']} --spec-draft-n-max 7 --spec-draft-p-min 0.5 "
                       "--spec-draft-sampling probabilistic", unit)
@@ -287,15 +287,15 @@ class TheStagedUnit(unittest.TestCase):
                           PINS["FLASH_UNSLOTH_YARN"], PINS["FLASH_UNSLOTH_KV"]), ("0", "2", "262144", "", ""))
 
     def test_a_window_the_requests_share_is_refused_and_says_why(self):
-        # SHARED=1 (-kvu): llama-server stopped itself under load each time requests shared a window, four loads of four
-        # on 2026-11-12 with b12291 and with the pinned image b12316 ("common/common.cpp:1634: failed to remove sequence
+        # SHARED=1 (-kvu): llama-server stopped itself under load in four of the nine runs that shared a window, on
+        # 2026-11-12 with b12291 and with the pinned image b12316 ("common/common.cpp:1634: failed to remove sequence
         # N with p0=..., p1=-1", llama.cpp issue 31656): the render refuses it, says why, and writes no unit
         for slots in ("4", "2"):
             with self.subTest(slots=slots):
                 rc, out, cmd = self.staged_with(SHARED="1", SLOTS=slots)
                 self.assertNotEqual(rc, 0, out)
                 self.assertIn("FLASH_UNSLOTH_SHARED=1 (one window the requests share, -kvu) is refused: llama-server "
-                              "stopped itself under load", out)
+                              "stopped itself under load in four of the nine runs that shared a window", out)
                 self.assertIn("failed to remove sequence", out)
                 self.assertEqual(cmd, "")
                 self.assertFalse(self.out.exists(), "a unit written all the same")
@@ -763,6 +763,34 @@ class TheInstallSetsTheUsersOpencodeForTheWindow(unittest.TestCase):
         c = json.loads(cfg.read_text())
         self.assertEqual(c["provider"]["flash-unsloth"]["models"]["qwen3.8-flash-next-unsloth"]["limit"],
                          {"context": 830000, "input": 830000, "output": 32000})
+
+    def test_a_config_that_refuses_the_pair_is_said(self):
+        # a config edited by hand whose limit is no object: oc-merge-limits.py refuses it on its stdout, which the block
+        # threw away with "|| true", and the update kept the old pair without a word, for this lane and for FP4-Local's
+        # (code review of v1.48.0, 2026-11-12); switch-model.sh said it, and the install says it now
+        start = self.TEXT.index('if [ -f "$OC_USER_CFG" ]; then\n  if [ "${LANE:-27b}" = "flash" ]; then')
+        block = self.TEXT[start:self.TEXT.index("# The default model and the served entry's picker name follow the install", start)]
+        d = pathlib.Path(tempfile.mkdtemp(prefix="flu-install-oc-refused-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        cfg = d / "opencode.json"
+        cfg.write_text(json.dumps({"provider": {
+            "qwen38": {"models": {"qwen3.8-27b": {"limit": {"context": 547000, "input": 547000, "output": 182000}}}},
+            "flash-local": {"models": {"qwen3.8-flash-next-fp4": {"limit": 5}}},
+            "flash-unsloth": {"models": {"qwen3.8-flash-next-unsloth": {"limit": 5}}}}}, indent=2) + "\n")
+        script = "\n".join(["set -uo pipefail", f'REPO_DIR="{REPO}"', f'OC_USER_CFG="{cfg}"', "LANE=27b",
+                            "OC_CTX=547000 OC_OUT=182000 OC_KEEP=205000 CONTEXT_MODE=1m _ENV_CONTEXT_MODE= MEM_CLASS=128",
+                            f'SGL_UNIT_PATH="{d}/none.service"', "OC_FLASH_LOCAL=1 OC_FLASH_LOCAL_CTX=840000 OC_FLASH_LOCAL_OUT=32000",
+                            "OC_FLASH_UNSLOTH=1 OC_FLASH_UNSLOTH_CTX=830000 OC_FLASH_UNSLOTH_OUT=32000", block])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+                           env={"PATH": "/usr/bin:/bin", "HOME": str(d)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"NOTE: could not update the Qwen3.8 Flash-Next Unsloth GGUF limits in {cfg}; check them by hand "
+                      "(830000 32000)", r.stdout)
+        self.assertIn(f"NOTE: could not update the Qwen3.8 Flash-Next FP4-Local limits in {cfg}; check them by hand "
+                      "(840000 32000)", r.stdout)
+        c = json.loads(cfg.read_text())["provider"]
+        self.assertEqual((c["flash-local"]["models"]["qwen3.8-flash-next-fp4"]["limit"],
+                          c["flash-unsloth"]["models"]["qwen3.8-flash-next-unsloth"]["limit"]), (5, 5))
 
     def test_flash_unsloth_context_is_not_read_by_the_install(self):
         start = self.TEXT.index('if [ -n "${FLASH_UNSLOTH_CONTEXT+set}" ]; then')

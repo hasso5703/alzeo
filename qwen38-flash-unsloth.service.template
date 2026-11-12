@@ -25,8 +25,7 @@ ExecStartPre=/bin/bash __HOME__/.config/qwen38/engine-preflight.sh qwen38-flash-
 #   --lazy-mode on: the model's n-gram table (its fourth part, 26.8 GiB in IQ4_NL) is read from the disk row by row
 #     as the tokens need it, instead of being held in memory. Without it, on this GPU (an integrated one, which
 #     llama.cpp's auto mode loads without mmap) the table loads with the weights: at 131,072 tokens of context the
-#     guard stopped the load at 5 GiB free; with it, one request at a window of 1,048,576 tokens left 16 GiB
-#     available at ready.
+#     guard stopped the load at 5 GiB free; with it the lane leaves 20 GiB available at ready with its two windows.
 #     --load-mode, the installer's LOAD (none, 2026-11-12): the weights copied into the GPU's memory, 27.6 tok/s where
 #     mmap, which has the GPU read them in place in the page cache, decoded at 24.9 side by side (the installer has the
 #     numbers). The files are read where the cache keeps them, with no copy and no preload; from a USB SSD a start
@@ -37,7 +36,7 @@ ExecStartPre=/bin/bash __HOME__/.config/qwen38/engine-preflight.sh qwen38-flash-
 #     in the GGUF), YaRN's options past it (its YARN), the KV cache's type (its KV, llama.cpp's own f16), and -np, the
 #     requests at once (its SLOTS, 2), each with a window of its own (-c holds them all, and no request can make
 #     another fail); a third request waits for one of them to end. A window the requests share (-kvu) is refused:
-#     llama-server stopped itself under load each time requests shared one (the installer says how).
+#     llama-server stopped itself under load in four of the nine runs that shared one (the installer says how).
 #     FLASH_UNSLOTH_CONTEXT=1m renders one request at a time instead, with a window of 1,048,576 by YaRN at four times
 #     and the KV cache in q8_0. --jinja and
 #     --chat-template-file: the chat template the GGUF carries, Unsloth's, with the fixes the other Qwen lanes'

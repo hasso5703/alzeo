@@ -151,21 +151,25 @@ FLASH_UNSLOTH_LOAD="none"
 FLASH_UNSLOTH_SLOTS="2"
 # How they hold their windows: 0, a window of CTX for each, -c being then CTX times SLOTS, the lane's: no request can
 # make another fail. 1, one window of CTX they share (-kvu), is refused (decision 1318): it was meant to serve more
-# requests at once on more context, and llama-server stopped itself under load each time requests shared a window, four
-# loads of four on 2026-11-12, with b12291 built on the box and with the pinned image b12316 ("common/common.cpp:1634:
-# failed to remove sequence N with p0=..., p1=-1", an abort in common_memory::seq_rm from post_decode:
-# nuit-20261112-1412 and -1454, variantes-20261112-1448-places-524-cram4-b12291 and -1501-kvu-image-image-b12316). It is
-# llama.cpp's open issue 31656: a draft's rejected tokens are rolled back from this hybrid model's recurrent snapshots,
+# requests at once on more context, and llama-server stopped itself under load in four of the nine runs that shared a
+# window on 2026-11-12, with b12291 built on the box and with the pinned image b12316 ("common/common.cpp:1634: failed
+# to remove sequence N with p0=..., p1=-1", an abort in common_memory::seq_rm from post_decode: nuit-20261112-1412 and
+# -1454, variantes-20261112-1448-places-524-cram4-b12291 and -1501-kvu-image-image-b12316). The five others, salvos of
+# 1, 4 and 8 short requests (variantes-20261112-0415-flux, -1304 and -1327), ended well: the abort is intermittent. It
+# is llama.cpp's open issue 31656: a draft's rejected tokens are rolled back from this hybrid model's recurrent snapshots,
 # which a sequence loses when find_slot moves its cell between the parts of a batch that a shared window splits out of
 # the sequences' order. Before they stopped: four sharing 524,288 by YaRN at twice, 22 GiB available at ready, 53.2
 # tok/s for one request and 72.6 in all with four under the clock cap of 2,200 MHz; four sharing 1,048,576, 11 GiB at
-# ready, then under 6. It comes back when llama.cpp fixes it (docs/flash-unsloth-lane.md).
+# ready, then under 6. It comes back when llama.cpp fixes it (docs/flash-unsloth-lane.md). A setting of this installer,
+# as SLOTS and CTX are: the environment does not set it.
 FLASH_UNSLOTH_SHARED="0"
 # A request's window, the context the model was trained for (qwen4exp.context_length in the GGUF): past it the server
 # caps a slot at 262,144 without YaRN. YARN, YaRN's factor over it, empty for none: with 2 (CTX 524288) three codes of
 # three were found at 250,000 and at 500,000 tokens, the 513,367-token prompt computed at 584.6 tok/s
 # (variantes-20261112-0429-contexte-b12291), one request alone, the KV cache in f16, 19 GiB available at ready. -c holds
-# CTX for each request; FLASH_UNSLOTH_CONTEXT=1m (below) gives one request 1,048,576.
+# CTX for each request: with a CTX past 262,144 set SLOTS to 1, since a second window of 262,144 tokens took 8.7 GiB
+# more of the GPU's memory (88,693 MiB with one, 97,552 with two, b12291) and two of 524,288 were not measured.
+# FLASH_UNSLOTH_CONTEXT=1m (below) gives one request 1,048,576.
 FLASH_UNSLOTH_CTX="262144"
 FLASH_UNSLOTH_YARN=""
 # The KV cache's type (-ctk and -ctv): empty for llama.cpp's own f16, the lane's (its GSM8K and HumanEval were measured
@@ -253,7 +257,7 @@ render_unit(){
   case "$FLASH_UNSLOTH_KV" in ''|f16|q8_0) ;; *) die "FLASH_UNSLOTH_KV must be empty, f16 or q8_0 (FP8 is refused for this model), got: $FLASH_UNSLOTH_KV" ;; esac
   case "$FLASH_UNSLOTH_SHARED" in
     0) ;;
-    1) die "FLASH_UNSLOTH_SHARED=1 (one window the requests share, -kvu) is refused: llama-server stopped itself under load each time requests shared a window (\"failed to remove sequence\", measured on 2026-11-12 with b12291 and with the image b12316; llama.cpp issue 31656). Set it to 0, a window each." ;;
+    1) die "FLASH_UNSLOTH_SHARED=1 (one window the requests share, -kvu) is refused: llama-server stopped itself under load in four of the nine runs that shared a window (\"failed to remove sequence\", measured on 2026-11-12 with b12291 and with the image b12316; llama.cpp issue 31656). Set it to 0, a window each." ;;
     *) die "FLASH_UNSLOTH_SHARED must be 0 (a window for each request), got: $FLASH_UNSLOTH_SHARED" ;;
   esac
   # FLASH_UNSLOTH_CONTEXT=1m: one request, a window of 1,048,576 by YaRN at four times, its KV cache in q8_0, as measured
