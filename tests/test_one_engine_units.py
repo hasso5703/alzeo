@@ -27,6 +27,7 @@ LANES = {
     "qwen38-nemotron-super.service": ("qwen38-nemotron-super.service.template",),
     "qwen38-flash-local.service": ("qwen38-flash-local.service.template",),
     "qwen38-ornith-122b.service": ("qwen38-ornith-122b.service.template",),
+    "qwen38-flash-unsloth.service": ("qwen38-flash-unsloth.service.template",),
 }
 ALL = set(LANES)
 

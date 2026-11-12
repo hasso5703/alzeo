@@ -486,14 +486,16 @@ jobs:
           # and `kolibri-nvfp4`, the Kolibri lane's two checkpoints (--with-kolibri),
           # `nemotron`, the Nemotron lane's (--with-nemotron), `nemotron-super`, the
           # Nemotron Super lane's (--with-nemotron-super), `flash-local`, the Flash
-          # FP4-Local lane's (--with-flash-local), and `ornith-122b`, the Ornith lane's
-          # (--with-ornith-122b), each switched to like any other, and none a MODEL_CHOICE
-          # (none has a recipe; Kolibri, the Nemotron lanes, Flash FP4-Local and Ornith
-          # serve text, from vLLM, under their own installers). Both sets are asserted, so a
+          # FP4-Local lane's (--with-flash-local), `ornith-122b`, the Ornith lane's
+          # (--with-ornith-122b), and `flash-unsloth`, the Qwen3.8 Flash-Next Unsloth GGUF
+          # lane's (--with-flash-unsloth), each switched to like any other, and none a
+          # MODEL_CHOICE (none has a recipe; Kolibri, the Nemotron lanes, Flash FP4-Local and
+          # Ornith serve text from vLLM, the Unsloth GGUF lane from llama.cpp, under their own
+          # installers). Both sets are asserted, so a
           # target added to the switcher and forgotten in the cockpit's enum is
           # still caught.
           FLAG_LANES = ["image", "image-turbo", "video", "kolibri", "kolibri-nvfp4", "nemotron", "nemotron-super", "flash-local",
-                        "ornith-122b"]
+                        "ornith-122b", "flash-unsloth"]
           ref = choices
           switch_ref = sorted(ref + FLAG_LANES)
           text_lists = {"install.sh MODEL_CHOICE": choices, "recipes BUILTIN_IDS": sorted(builtins)}
@@ -986,10 +988,11 @@ jobs:
           script = pathlib.Path("switch-model.sh").read_text()
           alw = pathlib.Path("dashboard/sudoers-cockpit.template").read_text()
           allowed = {m.strip() for m in re.findall(r"NOPASSWD:\s*(.+)$", alw, re.M)}
-          stage = dict(re.findall(r'^(STAGE_UNIT|STAGE_CEIL|IMG_STAGE|KOL_STAGE|NEM_STAGE|NSV_STAGE|FLL_STAGE|ORN_STAGE)="\$CONFIG_DIR/([^"]+)"', script, re.M))
+          stage = dict(re.findall(r'^(STAGE_UNIT|STAGE_CEIL|IMG_STAGE|KOL_STAGE|NEM_STAGE|NSV_STAGE|FLL_STAGE|ORN_STAGE|FLU_STAGE)="\$CONFIG_DIR/([^"]+)"', script, re.M))
           units = {"qwen38-sglang.service", "qwen38-flash.service"}
           engines = units | {"qwen38-image.service", "qwen38-video.service", "qwen38-kolibri.service", "qwen38-nemotron.service",
-                             "qwen38-nemotron-super.service", "qwen38-flash-local.service", "qwen38-ornith-122b.service"}
+                             "qwen38-nemotron-super.service", "qwen38-flash-local.service", "qwen38-ornith-122b.service",
+                             "qwen38-flash-unsloth.service"}
           values = {
               "TEXT_UNIT_NAME": engines, "TARGET_UNIT_NAME": units, "OTHER_UNIT_NAME": engines,
               "IMAGE_UNIT_NAME": {"qwen38-image.service"},
@@ -999,6 +1002,7 @@ jobs:
               "NEMOTRON_SUPER_UNIT_NAME": {"qwen38-nemotron-super.service"},
               "FLASH_LOCAL_UNIT_NAME": {"qwen38-flash-local.service"},
               "ORNITH_122B_UNIT_NAME": {"qwen38-ornith-122b.service"},
+              "FLASH_UNSLOTH_UNIT_NAME": {"qwen38-flash-unsloth.service"},
               "TARGET_UNIT": {re.search(r'^SGL_UNIT="([^"]+)"', script, re.M).group(1)},
               "IMAGE_UNIT": {re.search(r'^IMAGE_UNIT="([^"]+)"', script, re.M).group(1)},
               "KOLIBRI_UNIT": {re.search(r'^KOLIBRI_UNIT="([^"]+)"', script, re.M).group(1)},
@@ -1006,6 +1010,7 @@ jobs:
               "NEMOTRON_SUPER_UNIT": {re.search(r'^NEMOTRON_SUPER_UNIT="([^"]+)"', script, re.M).group(1)},
               "FLASH_LOCAL_UNIT": {re.search(r'^FLASH_LOCAL_UNIT="([^"]+)"', script, re.M).group(1)},
               "ORNITH_122B_UNIT": {re.search(r'^ORNITH_122B_UNIT="([^"]+)"', script, re.M).group(1)},
+              "FLASH_UNSLOTH_UNIT": {re.search(r'^FLASH_UNSLOTH_UNIT="([^"]+)"', script, re.M).group(1)},
               "STAGE_UNIT": {"__HOME__/.config/qwen38/" + stage["STAGE_UNIT"]},
               "STAGE_CEIL": {"__HOME__/.config/qwen38/" + stage["STAGE_CEIL"]},
               "IMG_STAGE": {"__HOME__/.config/qwen38/" + stage["IMG_STAGE"]},
@@ -1014,6 +1019,7 @@ jobs:
               "NSV_STAGE": {"__HOME__/.config/qwen38/" + stage["NSV_STAGE"]},
               "FLL_STAGE": {"__HOME__/.config/qwen38/" + stage["FLL_STAGE"]},
               "ORN_STAGE": {"__HOME__/.config/qwen38/" + stage["ORN_STAGE"]},
+              "FLU_STAGE": {"__HOME__/.config/qwen38/" + stage["FLU_STAGE"]},
           }
           seen, bad = 0, []
           for raw in script.splitlines():

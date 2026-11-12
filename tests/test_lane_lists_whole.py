@@ -15,7 +15,8 @@ the vLLM lanes that run b12x. A list names a lane by its unit, with or without "
 with the file and the line, and so does a list that lost a lane, unless what it kept is itself a
 family: a list of the other lanes in the image installer that lost the video lane is the text
 lanes, which the same file lists for good (found in review, 2026-10-20). Telling those apart takes
-binding each list to its family, one by one, which this does by name for the vLLM and b12x lists."""
+binding each list to its family, one by one, which this does by name for the vLLM and b12x lists, and for the
+text lanes on another engine than SGLang (OTHER_TEXT_UNITS: vLLM's and llama.cpp's, v1.48)."""
 import ast
 import pathlib
 import re
@@ -47,12 +48,19 @@ TEXT = ENGINE - DIFFUSION
 # the lanes whose installer stands on vllm-lane.sh
 VLLM = {f"qwen38-{p.name[len('install-'):-len('.sh')]}.service" for p in REPO.glob("install-*.sh")
         if re.search(r"^\s*(\.|source)\s+\S*vllm-lane\.sh", p.read_text(), re.M)}
+# the lanes whose installer stands on llamacpp-lane.sh (llama.cpp's server, v1.48)
+LLAMACPP = {f"qwen38-{p.name[len('install-'):-len('.sh')]}.service" for p in REPO.glob("install-*.sh")
+            if re.search(r"^\s*(\.|source)\s+\S*llamacpp-lane\.sh", p.read_text(), re.M)}
 # the lanes a switch away from them leaves a lane-before link for (lanes.sh walks those links)
 LANE_BEFORE = {f"qwen38-{x}.service" for p in REPO.glob("*.sh") for x in re.findall(r"lane-before-([a-z0-9-]+)\b", p.read_text())}
 # the units conformity.py reads to say whether a box is in its recommended state
 CONFORMITY = set(UNIT.findall((REPO / "conformity.py").read_text())) & ENGINE
 # the lanes that are not SGLang's text lanes: the cockpit's canary, pool guard and autoheal leave them out
-NOT_SGLANG = DIFFUSION | VLLM
+NOT_SGLANG = DIFFUSION | VLLM | LLAMACPP
+# the text lanes on another engine than SGLang, vLLM's and llama.cpp's (v1.48): the cockpit adds them to lc.TEXT_UNITS
+# to name every text lane, in a list named for them (OTHER_TEXT_UNITS), held to this family by its name, since without
+# the name a copy that lost the llama.cpp lane would read as the vLLM lanes
+OTHER_TEXT = TEXT & NOT_SGLANG
 # the vLLM lanes whose engine runs b12x, as their installers say: the cockpit's table of that family
 B12X = {u for u in VLLM if "b12x" in (REPO / f"install-{u[len('qwen38-'):-len('.service')]}.sh").read_text()}
 # the lanes whose unit mounts the Hugging Face cache (the flash lane's launcher mounts it for its unit)
@@ -64,6 +72,7 @@ HF_UNITS = {("qwen38-flash.service" if t.name == "qwen38-flash-launch.sh.templat
 CHOICE_LANE = {"kolibri": "qwen38-kolibri.service", "kolibri-nvfp4": "qwen38-kolibri.service",
                "nemotron": "qwen38-nemotron.service", "nemotron-super": "qwen38-nemotron-super.service",
                "flash-local": "qwen38-flash-local.service", "ornith-122b": "qwen38-ornith-122b.service",
+               "flash-unsloth": "qwen38-flash-unsloth.service",
                "image": "qwen38-image.service",
                "image-turbo": "qwen38-image.service", "video": "qwen38-video.service"}
 
@@ -74,7 +83,7 @@ CHOICE_LANE = {"kolibri": "qwen38-kolibri.service", "kolibri-nvfp4": "qwen38-kol
 # A list named for one of them must be that family whatever its size (a b12x table of three that lost
 # one was two, below the check's threshold), and the b12x family is taken from a list so named only:
 # the cockpit's NEMOTRON_LANES is that family's table, named before FP4-Local joined it.
-NAMED_FAMILIES = (("b12x", "B12X"), ("nemotron_lanes", "B12X"), ("vllm", "VLLM"))
+NAMED_FAMILIES = (("b12x", "B12X"), ("nemotron_lanes", "B12X"), ("vllm", "VLLM"), ("other_text", "OTHER_TEXT"))
 
 
 def family_of(name):
@@ -301,6 +310,9 @@ class TheLanesAreWhatTheTemplatesSay(unittest.TestCase):
                                 "qwen38-nemotron-super.service", "qwen38-flash-local.service",
                                 "qwen38-ornith-122b.service"})
         self.assertEqual(B12X, VLLM - {"qwen38-kolibri.service"})
+        # and the llama.cpp lanes, none of them a vLLM lane
+        self.assertEqual(LLAMACPP, {"qwen38-flash-unsloth.service"})
+        self.assertFalse(LLAMACPP & VLLM)
 
     def test_each_lane_conflicts_with_every_other_and_starts_after_them(self):
         for t in sorted(REPO.glob("qwen38-*.service.template")):
@@ -358,7 +370,7 @@ class EveryListNamesThemAll(unittest.TestCase):
                         if isinstance(t, ast.Name):
                             self.assertEqual(consts.setdefault(t.id, node.value.value), node.value.value, t.id)
         self.assertLessEqual({"IMAGE_UNIT", "VIDEO_UNIT", "KOLIBRI_UNIT", "NEMOTRON_UNIT", "NEMOTRON_SUPER_UNIT",
-                              "FLASH_LOCAL_UNIT", "ORNITH_UNIT"}, set(consts), consts)
+                              "FLASH_LOCAL_UNIT", "ORNITH_UNIT", "FLASH_UNSLOTH_UNIT"}, set(consts), consts)
 
         def unit_of(e):
             if isinstance(e, ast.Constant):

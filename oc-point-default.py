@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Point an opencode.json at the served lane: default model + picker name.
 
-Usage: oc-point-default.py <config.json> <lane: 27b|flash|kolibri|nemotron|nemotron-super|flash-local|ornith-122b> <choice> <window>
+Usage: oc-point-default.py <config.json> <lane: 27b|flash|kolibri|nemotron|nemotron-super|flash-local|ornith-122b|flash-unsloth> <choice> <window>
 <window> is the served context window in tokens (1010000 or 262144, empty if
 unknown): it sets the "(local, 1M|262K)" suffix on the served entry's name.
 
@@ -62,7 +62,9 @@ LABEL = {"stock": "Qwen3.8-27B NVFP4 + DFlash2",
          # NVIDIA's own FP4-Local build of the flash model, a lane of its own on vLLM.
          "flash-local": "Qwen3.8-Flash-Next FP4-Local NVIDIA + MTP",
          # Ornith AI's Ornith 1.5 122B, a lane of its own on vLLM.
-         "ornith-122b": "Ornith 1.5 122B NVFP4 + MTP"}
+         "ornith-122b": "Ornith 1.5 122B NVFP4 + MTP",
+         # Unsloth's GGUF of the flash model, a lane of its own on llama.cpp, with ggml-org's DFlash2 draft.
+         "flash-unsloth": "Qwen3.8-Flash-Next Unsloth UD-Q4_K_XL + DFlash2"}
 
 
 def label_for(choice: str, window: str) -> str | None:
@@ -94,7 +96,8 @@ def main() -> None:
             "nemotron": "nemotron/nemotron-3.5-bolt",
             "nemotron-super": "nemotron-super/nemotron-3.5-super-vl",
             "flash-local": "flash-local/qwen3.8-flash-next-fp4",
-            "ornith-122b": "ornith-122b/ornith-1.5-122b"}.get(lane, "qwen38/qwen3.8-27b")
+            "ornith-122b": "ornith-122b/ornith-1.5-122b",
+            "flash-unsloth": "flash-unsloth/qwen3.8-flash-next-unsloth"}.get(lane, "qwen38/qwen3.8-27b")
     prov, mid = want.split("/")
     try:
         text = ocm.read(path)

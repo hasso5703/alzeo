@@ -13,6 +13,7 @@ from [BENCHMARKS.md](../../BENCHMARKS.md) and the lane pages it links, nothing h
 | Nemotron 3.5 Super VL NVFP4 · NVIDIA | vLLM nightly 77154ca6 + b12x 1.5.1 | [nemotron-35-super-vl.md](nemotron-35-super-vl.md) | `./switch-model.sh nemotron-super` | 69.5 tok/s on code alone, a 1M window with images and video |
 | Kolibri-1 FP8 · Aleph Alpha (German) | vLLM 0.29.0 + Aleph Alpha plugin 1.0.0 | [kolibri-1.md](kolibri-1.md) | `./switch-model.sh kolibri` | 48 tok/s alone, German-first |
 | Ornith 1.5 122B NVFP4 · Ornith AI | vLLM b12x build 8244d1c | [ornith-122b.md](ornith-122b.md) | `./switch-model.sh ornith-122b` | 42.4 tok/s, vision, a 1M window |
+| Qwen3.8 Flash-Next UD-Q4_K_XL GGUF · Unsloth | llama.cpp b12316 | [qwen38-flash-next-unsloth-gguf.md](qwen38-flash-next-unsloth-gguf.md) | `./switch-model.sh flash-unsloth` | 51.8 tok/s on code and 123.7 on a rewrite of code at the card's sampling |
 | Qwen-Image 2.1 · Qwen | SGLang Diffusion 0.5.21 | [qwen-image-21.md](qwen-image-21.md) | `./switch-model.sh image` | 1024x1024 in 7.5 s with its Turbo |
 | MiniMax-H3 · MiniMax, video with sound | SGLang Diffusion 0.5.21 | [minimax-h3.md](minimax-h3.md) | `./switch-model.sh video` | 4 s of 480P in about 127 s with its Turbo |
 

@@ -25,8 +25,9 @@ TEXT_PORT = 30000
 #              installed by its own script only: "./install.sh does not run this", install-speech.sh)
 #   kind       what it serves: text, image, video or speech
 #   engine     sglang (lmsysorg/sglang images), vllm (the installers that source vllm-lane.sh),
-#              diffusion (SGLang Diffusion's wheel in the lane's own venv), own (this repo's
-#              speech-server.py, in front of llama.cpp's llama-server and Kokoro)
+#              llamacpp (llama.cpp's own llama-server image, the installers that source
+#              llamacpp-lane.sh), diffusion (SGLang Diffusion's wheel in the lane's own venv), own
+#              (this repo's speech-server.py, in front of llama.cpp's llama-server and Kokoro)
 #   b12x       whether its vLLM engine runs NVIDIA's b12x kernels, as its installer says
 #   targets    the switch targets of the lane (switch-model.sh, boxmem.TARGETS), in boxmem.TARGETS' order
 #   heavy_64   those of its targets a 64 GB DGX Spark does not take although the lane fits it
@@ -90,6 +91,13 @@ LANES = {
                     "targets": ("ornith-122b",), "heavy_64": (),
                     "served": "ornith-1.5-122b", "provider": "ornith-122b", "ports": (TEXT_PORT,),
                     "fits_64": False, "title": "Ornith 1.5 122B"},
+    # install-flash-unsloth.sh: llama.cpp's official image, Unsloth's GGUF of the flash model; its unit's
+    # --alias is qwen3.8-flash-next-unsloth (llama-server has no --served-model-name)
+    "flash-unsloth": {"unit": "qwen38-flash-unsloth.service", "installer": "install-flash-unsloth.sh", "flags": True,
+                      "kind": "text", "engine": "llamacpp", "b12x": False,
+                      "targets": ("flash-unsloth",), "heavy_64": (),
+                      "served": "qwen3.8-flash-next-unsloth", "provider": "flash-unsloth", "ports": (TEXT_PORT,),
+                      "fits_64": False, "title": "Qwen3.8 Flash-Next Unsloth GGUF"},
     # install-speech.sh: on the CPU beside any lane, PORT 30024 (SPEECH_PORT) and its recognizer on the
     # next one (ASR_PORT); no switch target, no official name of its own (it is "the speech lane")
     "speech": {"unit": "qwen38-speech.service", "installer": "install-speech.sh", "flags": False, "kind": "speech",

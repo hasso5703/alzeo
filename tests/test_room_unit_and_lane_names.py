@@ -98,7 +98,7 @@ class AVllmLaneIsNamedOfficially(unittest.TestCase):
     def test_the_first_step_of_an_installer_names_no_short_name(self):
         """ "1/5 Preflight (Bolt: ...", "(Super VL: ..." and "(FP4-Local: ..." were the three short names left."""
         reg = registry()
-        for lane in ("nemotron", "nemotron-super", "flash-local", "ornith-122b"):
+        for lane in ("nemotron", "nemotron-super", "flash-local", "ornith-122b", "flash-unsloth"):
             text = (REPO / reg.LANES[lane]["installer"]).read_text()
             self.assertIn(f'step "1/5 Preflight ({reg.LANES[lane]["title"]}: $MODEL', text, lane)
 

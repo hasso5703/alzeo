@@ -3667,7 +3667,8 @@ class TheLaneNamesAreThoseTheUnitsServe(unittest.TestCase):
         names = set(re.findall(r'"([^"]+)"', block))
         served = set()
         for t in REPO.glob("*.template"):
-            served |= set(re.findall(r"--served-model-name[ =]([A-Za-z0-9._/-]+)", t.read_text()))
+            # llama-server's --alias, the name of a llama.cpp lane (v1.48)
+            served |= set(re.findall(r"--(?:served-model-name|alias)[ =]([A-Za-z0-9._/-]+)", t.read_text()))
         self.assertEqual(names, served, "a lane's served name and the pair's list of lane names agree")
 
 

@@ -18,11 +18,15 @@ The 'minimal' -> 'low' mapping (an OpenAI effort tier) was contributed
 by forum user helge: https://forums.developer.nvidia.com/t/380257/10
 
 Usage: patch-template.py [--patches=NAMES] <hf_cache_dir> <output_path> [revision] [repo]
+       patch-template.py [--patches=NAMES] --gguf=<first part of a GGUF> <output_path>
 --patches=system-reminder (comma-separated names) applies those fixes alone, for a template with
 no reasoning effort of its own; without it, all five. An option of the call, not a variable of the
 environment: TEMPLATE_PATCHES, which v1.40.2 read as first pushed, reached every caller, and one
 left in a shell made ./install.sh write the 27B's template without its effort fixes (found in
 review, 2026-10-24).
+--gguf: the template a GGUF carries in its header (tokenizer.chat_template), for a llama.cpp lane,
+whose checkpoint has no chat_template.jinja: Unsloth's GGUF of the flash model carries Qwen's
+template with Unsloth's changes, which two of the fixes meet in their own words (their anchors below).
 Idempotent: succeeds if the patches are already applied. When a revision is
 given (sha or ref name like 'main'), the template is taken from that exact
 snapshot; otherwise the most recently modified snapshot is used. The optional
@@ -31,6 +35,7 @@ read the template from.
 """
 import glob
 import os
+import struct
 import sys
 
 EFFORT_ANCHOR = (
@@ -45,6 +50,15 @@ EFFORT_PATCHED = (
     "        {%- set resolved_reasoning_effort = 'low' %}\n"
     "    {%- endif %}\n"
     "    {%- if resolved_reasoning_effort not in ('xhigh', 'medium', 'low', 'lean') %}"
+)
+# Unsloth's template (unsloth/Qwen3.8-Flash-Next-GGUF, its tokenizer.chat_template at d96201194f10, read
+# 2026-11-12) maps 'high' to 'xhigh' itself between the same two lines: the same fix replaces the four.
+EFFORT_ANCHOR_UNSLOTH = (
+    "    {%- set resolved_reasoning_effort = reasoning_effort|default('xhigh') %}\n"
+    "    {%- if resolved_reasoning_effort == 'high' %}\n"
+    "        {%- set resolved_reasoning_effort = 'xhigh' %}\n"
+    "    {%- endif %}\n"
+    "    {%- if resolved_reasoning_effort not in ('xhigh', 'medium', 'low') %}"
 )
 
 # -- Patch 3: the "lean" effort level, and it becomes the default -------------
@@ -106,6 +120,16 @@ SYSTEM_PATCHED = (
     "            {{- '<|im_start|>user\\n<system-reminder>\\n' + content + '\\n</system-reminder><|im_end|>' + '\\n' }}\n"
     "        {%- endif %}"
 )
+# Unsloth's template merges the system and developer messages that open the conversation into one system turn, and
+# skips them in its loop (loop.index0 >= num_sys): one that reaches this branch is past them, and it still raised.
+SYSTEM_ANCHOR_UNSLOTH = (
+    "    {%- if message.role == \"system\" or message.role == \"developer\" %}\n"
+    "        {{- raise_exception('System message must be at the beginning.') }}"
+)
+SYSTEM_PATCHED_UNSLOTH = (
+    "    {%- if message.role == \"system\" or message.role == \"developer\" %}\n"
+    "        {{- '<|im_start|>user\\n<system-reminder>\\n' + content + '\\n</system-reminder><|im_end|>' + '\\n' }}"
+)
 
 # Patch 5: Claude Code 2.1.304's ToolSearch (its tool search for MCP servers) answers a
 # tool call with a tool_result made of tool_reference blocks, not text. SGLang's Anthropic
@@ -141,18 +165,72 @@ TOOL_REF_RAISE = "raise_exception"
 PATCHES = ("reasoning_effort", "lean", "effort-message", "system-reminder", "tool-reference")
 EFFORT_PATCHES = {"reasoning_effort", "lean", "effort-message"}
 
+# The bytes of each fixed-size type of a GGUF's metadata (ggml's gguf.h: uint8 0 to float64 12, bool 7).
+GGUF_SIZES = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+GGUF_STRING, GGUF_ARRAY = 8, 9
+
+
+def gguf_template(path: str) -> str:
+    """tokenizer.chat_template of a GGUF (versions 2 and 3), read from its header alone: each key in turn, the values
+    before it skipped by their sizes, no tensor read. The first part of a split GGUF holds the whole header."""
+    try:
+        f = open(path, "rb")
+    except OSError as e:
+        sys.exit(f"{path}: {e.strerror}. Run the checkpoint download first")
+    with f:
+        def read(fmt):
+            raw = f.read(struct.calcsize(fmt))
+            if len(raw) != struct.calcsize(fmt):
+                sys.exit(f"{path}: its header ends before its metadata does")
+            return struct.unpack(fmt, raw)
+
+        def skip(kind):
+            if kind in GGUF_SIZES:
+                f.seek(GGUF_SIZES[kind], 1)
+            elif kind == GGUF_STRING:
+                f.seek(read("<Q")[0], 1)
+            elif kind == GGUF_ARRAY:
+                item, n = read("<IQ")
+                if item in GGUF_SIZES:
+                    f.seek(GGUF_SIZES[item] * n, 1)
+                else:
+                    for _ in range(n):
+                        skip(item)
+            else:
+                sys.exit(f"{path}: a metadata value of a type this does not know ({kind})")
+
+        if f.read(4) != b"GGUF":
+            sys.exit(f"{path} is not a GGUF file")
+        version, = read("<I")
+        if version not in (2, 3):
+            sys.exit(f"{path}: GGUF version {version}, this reads versions 2 and 3")
+        _, n_kv = read("<QQ")
+        for _ in range(n_kv):
+            key = f.read(read("<Q")[0]).decode("utf-8", "replace")
+            kind, = read("<I")
+            if key == "tokenizer.chat_template" and kind == GGUF_STRING:
+                return f.read(read("<Q")[0]).decode("utf-8")
+            skip(kind)
+    sys.exit(f"{path} carries no tokenizer.chat_template")
+
 
 def main() -> None:
-    args = [a for a in sys.argv[1:] if not a.startswith("--patches=")]
+    args = [a for a in sys.argv[1:] if not a.startswith(("--patches=", "--gguf="))]
     asked_patches = [a[len("--patches="):] for a in sys.argv[1:] if a.startswith("--patches=")]
-    if len(args) not in (2, 3, 4) or len(asked_patches) > 1:
+    gguf = [a[len("--gguf="):] for a in sys.argv[1:] if a.startswith("--gguf=")]
+    if len(asked_patches) > 1 or len(gguf) > 1 or (gguf and len(args) != 1) or (not gguf and len(args) not in (2, 3, 4)):
         sys.exit(__doc__)
-    hf_cache, out_path = args[0], args[1]
-    revision = args[2] if len(args) >= 3 else None
-    repo = args[3] if len(args) == 4 else "RadixArk/Qwen3.8-27B-NVFP4"
+    if gguf:
+        out_path, chosen = args[0], gguf[0]
+        tpl = gguf_template(chosen)
+    else:
+        out_path, chosen = args[1], None
+        tpl = None
+    hf_cache = args[0]
+    revision = args[2] if not gguf and len(args) >= 3 else None
+    repo = args[3] if not gguf and len(args) == 4 else "RadixArk/Qwen3.8-27B-NVFP4"
     repo_dir = f"{hf_cache}/hub/models--{repo.replace('/', '--')}"
-    chosen = None
-    if revision:
+    if tpl is None and revision:
         ref_file = f"{repo_dir}/refs/{revision}"
         if os.path.isfile(ref_file):  # ref name (e.g. 'main') -> resolve to the sha
             revision = open(ref_file, encoding="utf-8").read().strip()
@@ -169,7 +247,8 @@ def main() -> None:
         chosen = max(hits, key=os.path.getmtime)
         if len(hits) > 1:
             print(f"note: {len(hits)} snapshots present, using the most recent: {chosen.split('/')[-2][:12]}")
-    tpl = open(chosen, encoding="utf-8").read()
+    if tpl is None:
+        tpl = open(chosen, encoding="utf-8").read()
 
     # The fixes this lane asks for: all five unless it says otherwise, as the Qwen3.8 27B and
     # flash templates carry the anchors of all five. A checkpoint whose template has no reasoning
@@ -214,17 +293,20 @@ def main() -> None:
         msg_patched = MSG_PATCHED.replace("@@LEVELS@@", MSG_LEVELS[lean_default])
         print(f"default reasoning effort: {'lean' if lean_default else 'xhigh'}{why}")
 
-    for name, anchor, patched, marker in (
-        ("reasoning_effort", EFFORT_ANCHOR, effort_patched, "'minimal'"),
-        ("lean", LEAN_ANCHOR, LEAN_PATCHED, LEAN_MARKER),
-        ("effort-message", MSG_ANCHOR, msg_patched, "Supported types are lean"),
-        ("system-reminder", SYSTEM_ANCHOR, SYSTEM_PATCHED, "<system-reminder>"),
-        ("tool-reference", TOOL_REF_ANCHOR, TOOL_REF_PATCHED, TOOL_REF_MARKER),
+    # Each fix by the anchors it knows, Qwen's first, then Unsloth's words for the same lines (--gguf).
+    for name, variants, marker in (
+        ("reasoning_effort", ((EFFORT_ANCHOR, effort_patched), (EFFORT_ANCHOR_UNSLOTH, effort_patched)), "'minimal'"),
+        ("lean", ((LEAN_ANCHOR, LEAN_PATCHED),), LEAN_MARKER),
+        ("effort-message", ((MSG_ANCHOR, msg_patched),), "Supported types are lean"),
+        ("system-reminder", ((SYSTEM_ANCHOR, SYSTEM_PATCHED), (SYSTEM_ANCHOR_UNSLOTH, SYSTEM_PATCHED_UNSLOTH)),
+         "<system-reminder>"),
+        ("tool-reference", ((TOOL_REF_ANCHOR, TOOL_REF_PATCHED),), TOOL_REF_MARKER),
     ):
         if name not in wanted:
             continue
-        if anchor in tpl:
-            tpl = tpl.replace(anchor, patched, 1)
+        hit = next(((anchor, patched) for anchor, patched in variants if anchor in tpl), None)
+        if hit:
+            tpl = tpl.replace(hit[0], hit[1], 1)
             print(f"patch '{name}': applied")
         elif marker in tpl:
             print(f"patch '{name}': already present upstream, nothing to do")

@@ -39,6 +39,15 @@ on('decode', d => {
     setText('tr-kv', l.num_tokens ? (100 * (l.num_used_tokens || 0) / l.num_tokens).toFixed(1) + ' %' : 'idle');
     return;
   }
+  if (!d.lane && isLlamacpp((servingEngine() || [])[0])){
+    // llama.cpp's own counters (llamacpp_load): the acceptance of its drafts (its n-gram lookup's and its DFlash2
+    // draft's) over the last seconds, read with vLLM's formula, idle when no draft came in them; it publishes no gauge
+    // of its KV cache
+    const l = F.load || {};
+    setText('tr-acc', l.accept_len != null ? l.accept_len.toFixed(2) : 'idle');
+    setText('tr-kv', 'not published by llama.cpp');
+    return;
+  }
   if (!d.lane){ setText('tr-acc', 'none'); setText('tr-kv', 'none'); return; }
   setText('tr-acc', t ? t.accept_len.toFixed(2) : 'idle');
   setText('tr-kv', t ? (100 * t.token_usage).toFixed(1) + ' %' : u.tokens ? (100 * u.tokens).toFixed(0) + ' %' : 'idle');
@@ -63,15 +72,19 @@ on('metrics', d => {
     // The Kolibri lane serves on vLLM: "no text engine is serving" was said while it served
     // (found in review, 2026-10-14)
     const sv = (servingEngine() || [])[0];
-    const vname = VLLM_LANE_NAME[sv] || '', up = !!vname && textReady();
+    // and the llama.cpp lanes (v1.48), which serve their counters with the key the cockpit sends
+    const vname = VLLM_LANE_NAME[sv] || (isLlamacpp(sv) ? LANE_NAME[sv] : ''), up = !!vname && textReady();
+    const eng = isLlamacpp(sv) ? 'llama.cpp' : 'vLLM';
     // while it loads it serves nothing yet, next to a Requests line that says so (review, 2026-10-14)
-    cap('wm-cap', up ? `${vname}: vLLM` : vname ? `${vname}: loading` : 'no text engine', ''); setText('wm-note', '');
-    setText('wm-verdict', up ? `The ${vname} lane serves on vLLM: its counters come with the next read.`
+    cap('wm-cap', up ? `${vname}: ${eng}` : vname ? `${vname}: loading` : 'no text engine', ''); setText('wm-note', '');
+    setText('wm-verdict', up ? `The ${vname} lane serves on ${eng}: its counters come with the next read.`
                          : vname ? `The ${vname} lane is loading: it serves nothing yet.`
                          : 'No text engine is serving: there is nothing to count.');
     facts($('wm-facts'), []); return;
   }
-  if (d.requests == null){
+  // llama.cpp counts no request (engine_metrics.py): its window has none, and is read all the same
+  const llama = d.engine === 'llamacpp';
+  if (d.requests == null && !llama){
     // nothing read yet for this engine: a read that failed is said apart from one on its way
     cap('wm-cap', d.read === false ? 'no counters' : 'first read', ''); setText('wm-note', '');
     setText('wm-verdict', d.read === false
@@ -93,11 +106,12 @@ on('metrics', d => {
   setText('wm-verdict', (d.read === false ? 'The last read of the engine’s counters failed: these numbers come from the one before. ' : '')
       + (d.approximate ? 'A canary ran beside a client request, so it is counted as one while it lies inside the window. ' : '')
       + (vllm ? 'From vLLM’s own counters: its tokens and latencies as it makes them, a request, its wait and its prefill once it finishes.'
+         : llama ? 'From llama.cpp’s own counters: a prompt’s tokens and an answer’s, and the time it spent on each, counted when each is done.'
          : 'From the engine’s own counters: each request counted once, when it finishes, and the cockpit’s canary taken out.'));
   facts($('wm-facts'), [
-    ['Requests finished', fmtN(d.requests)],
-    // vLLM counts a prompt's tokens as it reads them, SGLang when its request finishes
-    ['Prompt tokens from the cache', d.reuse == null ? (vllm ? 'no prompt read' : 'no request finished')
+    ['Requests finished', d.requests == null ? 'not counted by llama.cpp' : fmtN(d.requests)],
+    // vLLM counts a prompt's tokens as it reads them, SGLang when its request finishes, llama.cpp when the prompt is done
+    ['Prompt tokens from the cache', d.reuse == null ? (vllm ? 'no prompt read' : llama ? 'no prompt done' : 'no request finished')
                                                      : `${(100 * d.reuse).toFixed(1)} % of ${fmtN(d.prompt_tokens)}`],
     // the queue is what the client waits before the engine starts on it; prefill counts the
     // tokens the engine computed over its own prefill stopwatch, cache reads not in it
@@ -113,7 +127,7 @@ on('metrics', d => {
     ['Busiest moment', peaks.length ? peaks.join(', ') : null],
     ['Idle in the window', d.idle_share == null ? null : `${Math.round(100 * d.idle_share)} % of the time`],
     // vLLM counts no client that left (engine_metrics.py): not counted, which is not none
-    ['Abandons the engine accepted', d.aborted == null ? 'not counted by vLLM' : d.aborted > 0 ? fmtN(d.aborted) : 'none']]);
+    ['Abandons the engine accepted', d.aborted == null ? (llama ? 'not counted by llama.cpp' : 'not counted by vLLM') : d.aborted > 0 ? fmtN(d.aborted) : 'none']]);
 });
 const feedTime = ts => {
   if (!ts || ts.length < 19) return ts || '';
@@ -156,7 +170,8 @@ on('reqguard', d => {
   // an SGLang setting, which the guard reads on the SGLang lanes only
   setText('zg-override', d.override === true ? 'yes' : d.override === false ? 'no' : d.lane ? 'unknown (docker did not answer)'
     : (servingEngine() || [])[0] === KOLIBRI_UNIT ? 'not on the Kolibri-1 lane (an SGLang setting)'
-    : isB12x((servingEngine() || [])[0]) ? `not on ${b12xName((servingEngine() || [])[0])} (an SGLang setting)` : 'no engine');
+    : isB12x((servingEngine() || [])[0]) ? `not on ${b12xName((servingEngine() || [])[0])} (an SGLang setting)`
+    : isLlamacpp((servingEngine() || [])[0]) ? `not on ${llamacppName((servingEngine() || [])[0])} (an SGLang setting)` : 'no engine');
   const acted = [];
   if (g.aborted) acted.push(`${g.aborted} aborted`);
   if (g.drained) acted.push(`${g.drained} drained${g.drain_max_s != null ? `, longest ${g.drain_max_s.toFixed(0)} s` : ''}`);
@@ -206,11 +221,14 @@ on('machine', d => {
 const kolibriHolds = () => (servingEngine() || [])[0] === KOLIBRI_UNIT;
 // the Nemotron lanes, the Qwen3.8 Flash-Next FP4-Local lane and Ornith run on vLLM too
 const nemotronHolds = () => isB12x((servingEngine() || [])[0]);
+// and the llama.cpp lanes, which stop a request whose connection closes, as vLLM does (proxy v6.55)
+const llamacppHolds = () => isLlamacpp((servingEngine() || [])[0]);
 // The floor stops generations through the proxy since v1.40.3, on every lane: vLLM has no route that
 // aborts a generation, and the proxy closes its connection, which vLLM stops (it said "cannot act" there).
 on('engine_fast', d => {
   if (!d.mem_floor) return;
-  const f = d.mem_floor, how = kolibriHolds() || nemotronHolds() ? ' (on vLLM, by closing their connections)' : '';
+  const f = d.mem_floor, how = kolibriHolds() || nemotronHolds() ? ' (on vLLM, by closing their connections)'
+    : llamacppHolds() ? ' (on llama.cpp, by closing their connections)' : '';
   setText('mm-floor', `stops generations under ${f.gib} GiB through the proxy${how}`
     + (f.aborts ? `, fired ${f.aborts} time${f.aborts > 1 ? 's' : ''}` : ', never fired'));
 });
@@ -218,6 +236,8 @@ on('lifecycle', d => {
   const g = d.pool_guard; if (!g) return;
   if (kolibriHolds()){ setText('mm-guard', 'not on the Kolibri-1 lane: vLLM has no cache flush route, and evicts its prefix cache by itself'); return; }
   if (nemotronHolds()){ setText('mm-guard', `not on ${b12xName((servingEngine() || [])[0])}: vLLM has no cache flush route, and evicts its prefix cache by itself`); return; }
+  // llama.cpp's neither: the guard, which flushes SGLang's cache, said "armed" on its lane (found by its test, 2026-11-12)
+  if (llamacppHolds()){ setText('mm-guard', `not on ${llamacppName((servingEngine() || [])[0])}: llama.cpp has no cache flush route, and evicts its prompt cache by itself`); return; }
   setText('mm-guard', !g.enabled ? 'off (COCKPIT_POOL_GUARD=0)' : g.fails ? `cannot flush since ${clockTime(g.last_fail)}: ${g.last_err}`
     : g.flushes ? `${g.flushes} flush${g.flushes > 1 ? 'es' : ''}, last ${clockTime(g.last)}, above ${Math.round(g.threshold * 100)} % held` : `armed at ${Math.round(g.threshold * 100)} % held, never fired`);
 });
@@ -576,7 +596,7 @@ function defaultLogSource(){
   if (u === IMAGE_UNIT || u === VIDEO_UNIT || u === PROXY_UNIT || e.state === 'failed' || e.restarting) return u;
   return u === UFLASH ? 'qwen38-flash' : u === KOLIBRI_UNIT ? 'qwen38-kolibri' : u === NEMOTRON_UNIT ? 'qwen38-nemotron'
     : u === NEMOTRON_SUPER_UNIT ? 'qwen38-nemotron-super' : u === FLASH_LOCAL_UNIT ? 'qwen38-flash-local'
-    : u === ORNITH_UNIT ? 'qwen38-ornith-122b' : 'qwen38-sglang';
+    : u === ORNITH_UNIT ? 'qwen38-ornith-122b' : u === FLASH_UNSLOTH_UNIT ? 'qwen38-flash-unsloth' : 'qwen38-sglang';
 }
 onShow('logs', () => {
   if (LOGS_WANT.src || !logTouched){ $('log-src').value = defaultLogSource(); LOGS_WANT.src = null; }

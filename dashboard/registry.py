@@ -39,13 +39,17 @@ PIN_MODELS = {
     "NEMOTRON_SUPER_DRAFT_REV": "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr",
     "FLASH_LOCAL_REV": "nvidia/Qwen3.8-Flash-Next-FP4-Local",
     "ORNITH_122B_REV": "ornith-ai/Ornith-1.5-122B-NVFP4",
+    # the Unsloth GGUF lane's: Unsloth's GGUF repository (the lane serves its UD-Q4_K_XL parts) and its draft's
+    "FLASH_UNSLOTH_REV": "unsloth/Qwen3.8-Flash-Next-GGUF",
+    "FLASH_UNSLOTH_DRAFT_REV": "ggml-org/Qwen3.8-Flash-Next-GGUF",
 }
 
 # Where the pins are written: the text lanes' in the switch and the installer, every other
 # lane's in its own installer.
 PIN_FILES = ("switch-model.sh", "run.sh", "install.sh",
              "install-image.sh", "install-video.sh", "install-kolibri.sh", "install-nemotron.sh",
-             "install-nemotron-super.sh", "install-flash-local.sh", "install-ornith-122b.sh")
+             "install-nemotron-super.sh", "install-flash-local.sh", "install-ornith-122b.sh",
+             "install-flash-unsloth.sh")
 
 PIN_RE = re.compile(r'^\s*([A-Z][A-Z0-9_]*REV)="?\$?\{?[A-Z0-9_:-]*?([0-9a-f]{40})',
                     re.MULTILINE)
@@ -53,9 +57,11 @@ PIN_RE = re.compile(r'^\s*([A-Z][A-Z0-9_]*REV)="?\$?\{?[A-Z0-9_:-]*?([0-9a-f]{40
 # Images that belong to this stack (everything else is none of our business). The Kolibri and
 # Nemotron lanes run images built on the box, which carry a tag and no digest: their builds were
 # missing from Library's engine images (found on the reference box, 2026-10-16). The Flash
-# FP4-Local lane runs the community b12x image its model card names, pulled by digest.
+# FP4-Local lane runs the community b12x image its model card names, pulled by digest, and the Unsloth
+# GGUF lane llama.cpp's own server image.
 ENGINE_IMAGE_RE = re.compile(
-    r"^(lmsysorg/sglang|qwen38-flash|qwen38-dflash2|qwen38-sglang|qwen38-kolibri:|qwen38-nemotron:|vllm|eugr/spark-vllm-b12x)")
+    r"^(lmsysorg/sglang|qwen38-flash|qwen38-dflash2|qwen38-sglang|qwen38-kolibri:|qwen38-nemotron:|vllm|eugr/spark-vllm-b12x"
+    r"|ghcr\.io/ggml-org/llama\.cpp)")
 
 
 # Where a lane's unit or launcher says its Hugging Face cache is: a text lane mounts it into
@@ -125,13 +131,34 @@ def snapshot_complete(snap: Path, allow=None) -> bool:
     indexes = [p for p in snap.rglob("*.safetensors.index.json") if allowed(p.relative_to(snap).as_posix(), allow)]
     if not indexes:
         # a link counts once its blob is there, as in an index (a link to a blob gone did)
-        return any(allowed(p.relative_to(snap).as_posix(), allow) and p.exists() for p in snap.rglob("*.safetensors"))
+        if any(allowed(p.relative_to(snap).as_posix(), allow) and p.exists() for p in snap.rglob("*.safetensors")):
+            return True
+        return gguf_complete(snap, allow)
     for idx in indexes:
         try:
             shards = set(json.loads(idx.read_text())["weight_map"].values())
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return False
         if not shards or not all((idx.parent / s).exists() for s in shards):
+            return False
+    return True
+
+
+# A GGUF split in parts names them <stem>-00001-of-00004.gguf and so on (llama.cpp's llama_split_path).
+GGUF_PART_RE = re.compile(r"^(.*)-(\d{5})-of-(\d{5})\.gguf$")
+
+
+def gguf_complete(snap: Path, allow=None) -> bool:
+    """A GGUF checkpoint (a llama.cpp lane's): no index, its files *.gguf, each in the snapshot once its blob is whole
+    (gguf-fetch.py and huggingface_hub link a file only then). Complete when one is there and every split GGUF has all
+    its parts: a fetch cut short between two parts left a model that llama.cpp refuses to load."""
+    files = [p for p in snap.rglob("*.gguf") if allowed(p.relative_to(snap).as_posix(), allow) and p.exists()]
+    if not files:
+        return False
+    names = {p.relative_to(snap).as_posix() for p in files}
+    for name in names:
+        m = GGUF_PART_RE.match(name)
+        if m and any(f"{m.group(1)}-{i:05d}-of-{m.group(3)}.gguf" not in names for i in range(1, int(m.group(3)) + 1)):
             return False
     return True
 

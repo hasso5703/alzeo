@@ -11,7 +11,9 @@
 #
 # Until v1.35 each installer carried its own copy of all of it, one renamed from the other: a fix
 # made in one was missing from the next (the shared image's builds were pruned in one of them only,
-# found in review, 2026-10-16).
+# found in review, 2026-10-16). The llama.cpp lanes' llamacpp-lane.sh sources it too (v1.48), for what
+# is no vLLM's here: the engine's cache and port, the uninstall of the unit and of the clients, the
+# preflight, the room, the putting in place of a unit, the proof.
 
 # ── The engine's cache, port and bind ─────────────────────────────────────────────────────────
 # The text lanes' cache and port: a vLLM lane is one of them for the proxy, so it answers where the
@@ -222,8 +224,10 @@ vlane_put_unit(){  # $1 the rendered unit, $2... what else the lane's start read
   LANE_FILES=("$INSTALLED" "$CONFIG_DIR/vllm-auth/vllm_engine_auth.py" "$CONFIG_DIR/engine-preflight.sh" "$CONFIG_DIR/engine-secrets.sh")
   # A unit that runs no engine-secrets.sh does not read it (the Qwen3.8 Flash-Next FP4-Local lane's), and the files a
   # lane's own start reads come before the note: added after it, a change of them alone said nothing
-  # (found in review, 2026-10-20).
+  # (found in review, 2026-10-20). One that mounts no vllm-auth does not read the key's middleware either (a
+  # llama.cpp lane's, whose server asks the key itself): a new middleware said it ran older files.
   grep -q 'engine-secrets\.sh' "$INSTALLED" 2>/dev/null || unset 'LANE_FILES[3]'
+  grep -q 'vllm-auth' "$INSTALLED" 2>/dev/null || unset 'LANE_FILES[1]'
   LANE_FILES+=("$@")
   if [ "$SMOKE" -eq 0 ] && lane_serves_older "$UNIT" "${LANE_FILES[@]}"; then
     echo "NOTE: $VLANE_SHORT runs older files than the ones installed now (its unit, its runtime or its start scripts); it runs these after: sudo systemctl restart $UNIT   (or Load it again from the cockpit)"
@@ -318,7 +322,7 @@ vlane_prove(){
   { [ -n "${LANE_FILES+x}" ] && [ "${#LANE_FILES[@]}" -gt 0 ]; } \
     || die "the proof runs before the service step (repo bug: please open an issue)"
   VLANE_WAS=""
-  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     [ "$u" = "$UNIT" ] && continue
     systemctl is-active --quiet "$u" 2>/dev/null && VLANE_WAS="$u"
   done

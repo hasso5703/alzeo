@@ -21,7 +21,7 @@ import installer_wall as wall  # noqa: E402
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SIDE = {"install-image.sh": "image", "install-video.sh": "video", "install-kolibri.sh": "kolibri",
         "install-nemotron-super.sh": "nemotron-super", "install-flash-local.sh": "flash-local",
-        "install-ornith-122b.sh": "ornith-122b"}
+        "install-ornith-122b.sh": "ornith-122b", "install-flash-unsloth.sh": "flash-unsloth"}
 SOURCE = '. "$HERE/lanes.sh"\n'
 
 
@@ -101,7 +101,7 @@ class TheSwitch(unittest.TestCase):
         for choice, goes in (("stock", True), ("uncensored", True), ("nemotron", True), ("fp8", False),
                              ("uncensored-fp8", False), ("flash", False), ("image-turbo", False),
                              ("video", False), ("kolibri-nvfp4", False), ("nemotron-super", False),
-                             ("flash-local", False), ("ornith-122b", False)):
+                             ("flash-local", False), ("ornith-122b", False), ("flash-unsloth", False)):
             with self.subTest(choice):
                 rc, out, err = bash(f'CHOICE={choice}\n{after[1]}\necho "went on"', "64")
                 self.assertEqual(rc == 0 and out == "went on\n", goes, err)
@@ -463,7 +463,7 @@ class TheRunSaysIt(unittest.TestCase):
         # lane's own installer; a lane that fits, with its unit, goes on to it
         units = wall.units_dir({"qwen38-nemotron.service": "[Service]\n"})
         script = wall.walled("prepare-lane.sh", at=PREPARE_SIDE, units=units)
-        for lane in ("image", "video", "kolibri", "nemotron-super", "flash-local", "ornith-122b"):
+        for lane in ("image", "video", "kolibri", "nemotron-super", "flash-local", "ornith-122b", "flash-unsloth"):
             with self.subTest(lane):
                 env, record = wall.fenced_env(QWEN38_MEMORY_CLASS="64")
                 r = subprocess.run(["bash", script, lane], capture_output=True, text=True, timeout=60, env=env)

@@ -232,6 +232,46 @@ def parse_flash_local_boot_log(lines: list[str]) -> dict:
     return {"stage": stage, "done": done, "fired_up": fired, "detail": detail}
 
 
+# ── The llama.cpp lanes speak llama-server ──────────────────────────────────────────────────
+# Its container log at its default verbosity, read on the reference box (llama.cpp's images b12282 and b12316, the
+# pinned one, serving Unsloth's GGUF of the flash model with its DFlash2 draft, 2026-11-12, the same lines in both):
+# "llama_server: initializing ...", "load_model: loading
+# model '<the first GGUF part>'", then nothing for the 3 to 7 min the weights take, "loading draft model '<the
+# draft>'", "load_model: initializing, n_slots = 1, n_ctx_slot = 262144", "model loaded", "listening on http://...".
+# Its /health answers 503 until "model loaded" and 200 after (its server-http.cpp). It writes no progress through the
+# weights, so the stage says which file is read and the bar the time, from the lane's usual boot.
+LLAMACPP_STAGES = ("init", "loading-weights", "loading-draft", "allocating-kv", "warming-up")
+LLAMACPP_MARKERS = [
+    # (substring, stage it opens, what is being done while that line is the latest)
+    ("llama_server: initializing", "init", "starting llama.cpp"),
+    ("load_model: loading model", "loading-weights", "the GGUF's weights, its n-gram table left on the disk"),
+    ("loading draft model", "loading-draft", "the DFlash2 draft"),
+    ("load_model: initializing, n_slots", "allocating-kv", "the KV cache of its window"),
+    ("model loaded", "warming-up", "starting the API"),
+    ("listening on", "warming-up", "ready"),
+]
+
+
+def parse_llamacpp_boot_log(lines: list[str]) -> dict:
+    """A llama.cpp lane's container log, in the shape parse_kolibri_boot_log returns. Only the latest boot counts (the
+    last "initializing"); fired up once the server says it listens."""
+    start = 0
+    for i, ln in enumerate(lines):
+        if "llama_server: initializing" in ln:
+            start = i
+    stage, detail, fired = None, "", False
+    for ln in lines[start:]:
+        for needle, st, what in LLAMACPP_MARKERS:
+            if needle in ln:
+                stage, detail = st, what
+                if needle == "listening on":
+                    fired = True
+    done = list(LLAMACPP_STAGES[:LLAMACPP_STAGES.index(stage)]) if stage in LLAMACPP_STAGES else []
+    if fired:
+        done = list(LLAMACPP_STAGES)
+    return {"stage": stage, "done": done, "fired_up": fired, "detail": detail}
+
+
 def _parse_diffusion_boot_log(lines: list[str], markers: list, stages: tuple) -> dict:
     """A diffusion lane's journal, reduced to the same shape parse_boot_log returns.
 
@@ -487,11 +527,13 @@ TRANSITIONAL = BUSY_STATES - {"ready", "degraded", "orphan", "wedged"}
 # weights and a KV cache set by its memory share, 85 GiB in all; the Nemotron Super lane,
 # 70 GiB of weights, 91 in all at its share; the Flash FP4-Local lane, 70 GiB of weights and the
 # rest of its share, 97 GiB, in KV cache; and the Ornith 1.5 122B lane, 72.6 GiB of weights at a
-# share of 97 GiB too.
+# share of 97 GiB too; and the Qwen3.8 Flash-Next Unsloth GGUF lane, llama.cpp's, 76.9 GiB of weights and a KV cache
+# for its window, 86.6 GiB of GPU memory in all with its draft (88,693 MiB by nvidia-smi on the reference box,
+# 2026-11-12), its n-gram table read from the disk.
 ENGINE_UNITS = ("qwen38-sglang.service", "qwen38-flash.service",
                 "qwen38-image.service", "qwen38-video.service", "qwen38-kolibri.service",
                 "qwen38-nemotron.service", "qwen38-nemotron-super.service", "qwen38-flash-local.service",
-                "qwen38-ornith-122b.service")
+                "qwen38-ornith-122b.service", "qwen38-flash-unsloth.service")
 IMAGE_UNIT = "qwen38-image.service"
 VIDEO_UNIT = "qwen38-video.service"
 KOLIBRI_UNIT = "qwen38-kolibri.service"
@@ -499,6 +541,7 @@ NEMOTRON_UNIT = "qwen38-nemotron.service"
 NEMOTRON_SUPER_UNIT = "qwen38-nemotron-super.service"
 FLASH_LOCAL_UNIT = "qwen38-flash-local.service"
 ORNITH_UNIT = "qwen38-ornith-122b.service"
+FLASH_UNSLOTH_UNIT = "qwen38-flash-unsloth.service"
 # The SGLang engines that serve text on ENGINE_BASE. Every probe, guard and belt that talks
 # to that port (the generation canary, the pool guard, the wedge autoheal) is about these
 # and only these: with a diffusion lane serving, :30000 is closed, and asking "is an
@@ -506,10 +549,10 @@ ORNITH_UNIT = "qwen38-ornith-122b.service"
 # Kolibri lane serves text on that port too, from vLLM, which none of those belts know
 # (its routes, its log and its model names are not SGLang's): the cockpit follows it on
 # its own facts, as it does the image and the video lanes. So do the Nemotron lanes, the Flash
-# FP4-Local lane and the Ornith lane, vLLM too.
+# FP4-Local lane and the Ornith lane, vLLM too, and the Unsloth GGUF lane, llama.cpp's.
 TEXT_UNITS = tuple(u for u in ENGINE_UNITS
                    if u not in (IMAGE_UNIT, VIDEO_UNIT, KOLIBRI_UNIT, NEMOTRON_UNIT, NEMOTRON_SUPER_UNIT, FLASH_LOCAL_UNIT,
-                                ORNITH_UNIT))
+                                ORNITH_UNIT, FLASH_UNSLOTH_UNIT))
 
 
 def blocked_reasons(action: str, params: dict, states: dict) -> list[str]:
@@ -1267,7 +1310,8 @@ def guard_verdict(zombies: dict, guard: dict, override_env: bool | None) -> tupl
 LANE_PROVIDER = {"qwen38-sglang.service": "qwen38", "qwen38-flash.service": "flashnext",
                  "qwen38-kolibri.service": "kolibri", "qwen38-nemotron.service": "nemotron",
                  "qwen38-nemotron-super.service": "nemotron-super",
-                 "qwen38-flash-local.service": "flash-local", "qwen38-ornith-122b.service": "ornith-122b"}
+                 "qwen38-flash-local.service": "flash-local", "qwen38-ornith-122b.service": "ornith-122b",
+                 "qwen38-flash-unsloth.service": "flash-unsloth"}
 
 
 def opencode_default_follows(default_model, states: dict) -> tuple:

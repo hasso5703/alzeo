@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keepalive proxy in front of SGLang or vLLM (v6.54). No content logging, and the only
+"""Keepalive proxy in front of SGLang, vLLM or llama.cpp (v6.55). No content logging, and the only
 rewriting is the tool-schema guard (role 4); two routes, POST /v1/systemone (role 5) and the
 operator's POST /proxy/stop (role 7), are answered here instead of relayed.
 
@@ -59,6 +59,15 @@ Ten roles, nothing else:
    lists every box's models (see "Two boxes behind one endpoint" below). A model both boxes serve is
    shared: a conversation stays on the box that holds its prefix, a new one goes to the box with the
    fewest requests in flight (v6.52, docs/pair.md).
+
+v6.55: the Qwen3.8 Flash-Next Unsloth GGUF lane (v1.48), served by llama.cpp's llama-server, which names itself
+"llamacpp" on /v1/models. Like vLLM it has none of SGLang's info, load or abort routes, and it stops a request whose
+connection closes, streamed or not (its server-context.cpp and server-queue.cpp, b12291): closing is its abort there too
+(CLOSE_ABORTS). Its window and its pool are the context its /v1/models row says (meta.n_ctx), its names one more flash
+model's (the flash ceiling holds), and System One says which lanes it serves on, as on vLLM. A reasoning effort of
+"none" goes as it came: llama-server turns it into enable_thinking false itself (server-common.cpp). The pair reads its
+unit's command as it reads the others': its name by --alias, its checkpoint by the snapshot its -m names, its requests
+at once by -np (names_in, revision_in, slots_in).
 
 v6.54: the Qwen3.8 Flash-Next FP4-Local lane at its 1M window (FLASH_LOCAL_CONTEXT=1m, v1.45.2) has no flash ceiling:
 its engine's window, read on /v1/models with the names it serves (served_window), says so, and its prompts are bounded
@@ -790,11 +799,16 @@ PROMPT_CEILING_TOKENS = int(os.environ.get("PROMPT_CEILING_TOKENS", "0") or 0)
 # 250,000 until the next boot, and the restart cut every stream in flight (found in review,
 # 2026-09-24). PROMPT_CEILING_TOKENS stays, as a ceiling on any lane.
 FLASH_PROMPT_CEILING_TOKENS = int(os.environ.get("FLASH_PROMPT_CEILING_TOKENS", "0") or 0)
-FLASH_SERVED_NAMES = frozenset({"qwen3.8-flash-next", "qwen3.8-flash-next-fp4"})
+FLASH_SERVED_NAMES = frozenset({"qwen3.8-flash-next", "qwen3.8-flash-next-fp4", "qwen3.8-flash-next-unsloth"})
 # The Qwen lanes vLLM serves (v6.43): the Flash FP4-Local lane, the flash model in NVIDIA's FP4
 # build, with the flash lane's chat template. Named one by one: a lane vLLM serves under another
 # name (Kolibri, the Nemotron lanes) has a template of its own, and its bodies go as they came.
 QWEN_VLLM_NAMES = frozenset({"qwen3.8-flash-next-fp4"})
+# The engines that stop a request whose connection closes, and have none of SGLang's abort routes (v6.55): vLLM
+# (measured 2026-10-14) and llama.cpp's llama-server, whose wait for an answer, streamed or not, ends with its HTTP
+# client and cancels its task (read in its server-context.cpp and server-queue.cpp, b12291, 2026-11-12). Closing is
+# their abort, and draining would keep a generation going for nobody.
+CLOSE_ABORTS = frozenset({"vllm", "llamacpp"})
 # Hard ceiling on one request body, in bytes (0 = none). The oversize guard
 # below measures prompt bodies once they are read; without a cap a lying or broken
 # Content-Length in the gigabytes is allocated before anything is counted,
@@ -2421,6 +2435,11 @@ def _vllm_facts(key, timeout):
         names = tuple(m["id"] for m in rows)
         note_engine(names, owner)
         _SERVED.update(names=names, engine=owner, window=served_window(rows), ts=time.time())
+    if rows and owner == "llamacpp":
+        # v6.55: llama.cpp publishes no KV cache gauge; a request's pool is the context of its slot, which /v1/models
+        # says: the whole KV cache with one slot or with the slots sharing it (-kvu), a slot's own share without -kvu
+        w = served_window(rows)
+        return w, w
     return vllm_pool_facts(text, models)
 
 
@@ -2430,8 +2449,8 @@ def pool_tokens():
         return _POOL["tokens"]
     try:
         try:
-            if _INFO_ROUTE["path"] is None and _SERVED["engine"] == "vllm":
-                # v6.39: this engine has neither of SGLang's info routes (vLLM): its own facts
+            if _INFO_ROUTE["path"] is None and _SERVED["engine"] in CLOSE_ABORTS:
+                # v6.39: this engine has neither of SGLang's info routes (vLLM, llama.cpp): its own facts
                 raise urllib.error.HTTPError(UPSTREAM, 404, "no SGLang info route", None, None)
             info = _server_info(_api_key(), POOL_READ_TIMEOUT_S)
         except urllib.error.HTTPError as e:
@@ -2440,7 +2459,7 @@ def pool_tokens():
             # v6.37: no SGLang info route at all, as on vLLM (the Kolibri lane), which says
             # both on /metrics and /v1/models; an engine with neither stays unmeasured.
             n, w = _vllm_facts(_api_key(), POOL_READ_TIMEOUT_S)
-            if _SERVED["engine"] != "vllm":
+            if _SERVED["engine"] not in CLOSE_ABORTS:
                 # not the vLLM engine the route was noted on: one that took the port with no unit
                 # start seen (a proxy that names none) kept the pool unread, then this read gave
                 # the vLLM engine's pool for it. Its facts are dropped and its routes asked again
@@ -3381,12 +3400,16 @@ def served_models():
 
 
 def served_window(rows) -> int:
-    """The window the engine says on /v1/models (max_model_len, which vLLM gives): the first row that says one, 0 when
-    none does. Read with the names, so the one-prompt ceiling decides on the list it was read with (v6.54), and the one
-    reader of it here (vllm_pool_facts reads the window through it too)."""
+    """The window the engine says on /v1/models (max_model_len, which vLLM gives, or the context of a llama.cpp slot,
+    meta.n_ctx, v6.55): the first row that says one, 0 when none does. Read with the names, so the one-prompt ceiling
+    decides on the list it was read with (v6.54), and the one reader of it here (vllm_pool_facts reads the window
+    through it too)."""
     for row in rows or []:
         if isinstance(row, dict) and isinstance(row.get("max_model_len"), int):
             return max(0, row["max_model_len"])
+        meta = row.get("meta") if isinstance(row, dict) and row.get("owned_by") == "llamacpp" else None
+        if isinstance(meta, dict) and isinstance(meta.get("n_ctx"), int):
+            return max(0, meta["n_ctx"])
     return 0
 
 
@@ -3548,7 +3571,7 @@ def route_model_name(body, path):
 # key it once carried as a second lock is also the cockpit's login, which is root on a box, SECURITY.md):
 # the pair port takes the pair's routes only, and this box's own key admits them to its engine.
 LANE_NAMES = frozenset({"qwen3.8-27b", "qwen3.8-flash-next", "qwen3.8-flash-next-fp4", "ornith-1.5-122b",
-                        "nemotron-3.5-bolt", "nemotron-3.5-super-vl", "kolibri-1"})
+                        "nemotron-3.5-bolt", "nemotron-3.5-super-vl", "kolibri-1", "qwen3.8-flash-next-unsloth"})
 PAIR_FILE = os.path.expanduser(os.environ.get("QWEN38_PAIR_FILE") or "~/.config/qwen38/pair.json")
 PAIR_DIR = os.path.join(os.path.dirname(PAIR_FILE), "pair")
 # made by pair.py, a directory renamed into place whole: a certificate never meets another key
@@ -4358,6 +4381,11 @@ def systemone_model(requested):
         # name its model is worse than a wait.
         raise SystemOneHold("this lane has not named itself yet: GET /v1/models did not answer, so no "
                             "answer here could say which model produced it; retry in a few seconds")
+    if _SERVED["engine"] == "llamacpp":
+        # v6.55: its option labels are read off top_logprobs as SGLang gives them, which llama.cpp gives otherwise, and
+        # nothing here was measured on it: the lanes it serves on are named, as on vLLM
+        raise SystemOneUsage(f"System One serves on the 27B and the flash lanes (SGLang): this box serves "
+                             f"{names[0]} on llama.cpp now. Load one of those lanes from the cockpit.", plain=False)
     if _SERVED["engine"] == "vllm":
         # v6.37: its option labels are measured on the Qwen tokenizer, and the Kolibri lane's
         # engine caps top_logprobs far below the fan-out's (it failed as a 502 there). vLLM caps
@@ -4957,7 +4985,7 @@ def _stop_engines(targets):
     # A vLLM request still waiting for its first byte closes now: closing is its abort, with no round
     # trip, and it waited for abort_all's 404 before, up to ABORT_TIMEOUT_S of prefill more on an engine
     # under the very pressure the floor fights (code review, 2026-10-26).
-    vllm = [h for h in targets if (getattr(h, "_upstream_engine", "") or _SERVED["engine"]) == "vllm"
+    vllm = [h for h in targets if (getattr(h, "_upstream_engine", "") or _SERVED["engine"]) in CLOSE_ABORTS
             and h._upstream_sock() is not None]
     for h in vllm:
         h._stop_waiting()
@@ -5149,8 +5177,11 @@ def unit_sets_rid_override():
 
 _UNIT_FACTS = {"ts": -1e9, "texts": None}
 _UNIT_FACTS_LOCK = threading.Lock()
-_SLOTS_FLAG = re.compile(r"(?<![\w-])--max-(?:running-requests|num-seqs)(?:=|[ \t]+)(\d+)(?![\w.])")
-_REVISION_FLAG = re.compile(r"(?<![\w-])--revision(?:=|[ \t]+)([0-9a-f]{40})(?![0-9A-Za-z])")
+# v6.55: a llama.cpp lane's command says each otherwise, llama-server having none of these flags: its requests at once
+# with -np, and its checkpoint in the path of its model (-m, a GGUF of the Hugging Face cache's snapshot of the pinned
+# revision; its draft's, -md, is another flag)
+_SLOTS_FLAG = re.compile(r"(?<![\w-])(?:--max-(?:running-requests|num-seqs)|-np)(?:=|[ \t]+)(\d+)(?![\w.])")
+_REVISION_FLAG = re.compile(r"(?<![\w-])(?:--revision(?:=|[ \t]+)|-m[ \t]+\S*?/snapshots/)([0-9a-f]{40})(?![0-9A-Za-z])")
 # What this box says it serves when no unit says it (a proxy run by hand, the tests): a checkpoint's revision, 40
 # hexadecimal characters, or nothing, and a box that says nothing shares no model with the other (decision 1018).
 PAIR_CHECKPOINT = (os.environ.get("PAIR_CHECKPOINT") or "").strip().lower()
@@ -5235,17 +5266,19 @@ def unit_slots():
 
 
 def revision_in(texts):
-    """The checkpoint's revision an engine's command names (--revision, 40 hexadecimal characters; a draft model's
-    --speculative-draft-model-revision is another flag), or None when it names none, or two."""
+    """The checkpoint's revision an engine's command names (--revision, 40 hexadecimal characters, or the snapshot of
+    llama-server's -m; a draft model's --speculative-draft-model-revision is another flag), or None when it names none,
+    or two."""
     found = {m.group(1) for x in texts for m in _REVISION_FLAG.finditer(x)}
     return found.pop() if len(found) == 1 else None
 
 
-_SERVED_FLAG = re.compile(r"(?<![\w-])--served-model-name(?:=|[ \t]+)([A-Za-z0-9][\w.:/+-]*)")
+_SERVED_FLAG = re.compile(r"(?<![\w-])--(?:served-model-name|alias)(?:=|[ \t]+)([A-Za-z0-9][\w.:/+-]*)")
 
 
 def names_in(texts):
-    """The names an engine's command serves its model under (--served-model-name)."""
+    """The names an engine's command serves its model under (--served-model-name; --alias on llama-server, which has
+    no --served-model-name, v6.55)."""
     return frozenset(m.group(1) for x in texts for m in _SERVED_FLAG.finditer(x))
 
 
@@ -6149,7 +6182,7 @@ class H(BaseHTTPRequestHandler):
                             _rid_override_honoured = (rid == forced)
                             # v6.37: on vLLM the rid is never used (closing stops it), and the
                             # SGLang advice below was a wrong lead in its journal
-                            if (getattr(self, "_upstream_engine", "") or _SERVED["engine"]) != "vllm":
+                            if (getattr(self, "_upstream_engine", "") or _SERVED["engine"]) not in CLOSE_ABORTS:
                                 log("this engine honours x-override-rid: an abandoned request "
                                     "can be aborted before it produces anything"
                                     if _rid_override_honoured else
@@ -6174,7 +6207,7 @@ class H(BaseHTTPRequestHandler):
         if forced and _rid_override_honoured is True:
             return forced
         if (forced and _rid_override_honoured is None and unit_sets_rid_override()
-                and (getattr(self, "_upstream_engine", "") or _SERVED["engine"]) != "vllm"):
+                and (getattr(self, "_upstream_engine", "") or _SERVED["engine"]) not in CLOSE_ABORTS):
             return forced           # the serving unit sets the override (2026-10-17)
         if observed and self.path.split("?")[0] in RID_PROOF_ROUTES:
             return observed         # engine ignored the override: its own id is the rid
@@ -6315,15 +6348,16 @@ class H(BaseHTTPRequestHandler):
         # v6.37: the engine this request was sent to, noted when it was (_open): the lane's
         # facts can be dropped meanwhile (a pool read that failed), and an abandoned Kolibri
         # stream then took SGLang's way, an /abort_request vLLM answers 404 and a drain.
-        if (getattr(self, "_upstream_engine", "") or _SERVED["engine"]) == "vllm":
+        engine = getattr(self, "_upstream_engine", "") or _SERVED["engine"]
+        if engine in CLOSE_ABORTS:
             # vLLM stops a request whose connection closes, the stream and the plain answer
-            # alike (measured 2026-10-14): closing is the abort, and draining would only keep
-            # its generation going for nobody. The socket is shut down here, before any
-            # close(): close() waits for the pump's read, which on a stream still prefilling
-            # returns with the first token only (48.5 s at 128K), and vLLM saw nothing until.
+            # alike (measured 2026-10-14), and so does llama.cpp (v6.55): closing is the abort, and
+            # draining would only keep its generation going for nobody. The socket is shut down here,
+            # before any close(): close() waits for the pump's read, which on a stream still
+            # prefilling returns with the first token only (48.5 s at 128K), and vLLM saw nothing until.
             self._aborted = True
             self._shut_upstream()
-            log(f"closing the upstream: vLLM stops what it generates for it ({why})")
+            log(f"closing the upstream: {'llama.cpp' if engine == 'llamacpp' else 'vLLM'} stops what it generates for it ({why})")
             return True
         rid = self._abortable_rid()
         if not rid:
@@ -9212,7 +9246,7 @@ if __name__ == "__main__":
     holds = (f"holds requests up to {HOLD_MAX_S:.0f}s while {' or '.join(HOLD_UNITS)} comes back"
              if HOLD_UNITS and HOLD_MAX_S > 0 else "holds nothing")
     # one f-string: the cockpit's tests render this line from the source
-    log(f"v6.54 on {BIND}:{port} -> {UPSTREAM} (keepalive {KEEPALIVE_S:.0f}s, max silence {MAX_SILENCE_S:.0f}s, {holds})")
+    log(f"v6.55 on {BIND}:{port} -> {UPSTREAM} (keepalive {KEEPALIVE_S:.0f}s, max silence {MAX_SILENCE_S:.0f}s, {holds})")
     # v6.47: what the memory floor's refusal reads, read once here, so the journal shows it works where
     # the unit runs this proxy (its sandbox leaves /proc/meminfo readable)
     avail = mem_available_gib()

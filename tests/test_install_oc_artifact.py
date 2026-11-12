@@ -20,7 +20,8 @@ INSTALL = REPO / "install.sh"
 
 def block() -> str:
     text = INSTALL.read_text()
-    start = text.index("OC_27B=0; OC_FLASH=0; OC_KOLIBRI=0; OC_NEMOTRON=0; OC_NEMOTRON_SUPER=0; OC_FLASH_LOCAL=0; OC_ORNITH_122B=0\n")
+    start = text.index("OC_27B=0; OC_FLASH=0; OC_KOLIBRI=0; OC_NEMOTRON=0; OC_NEMOTRON_SUPER=0; OC_FLASH_LOCAL=0; OC_ORNITH_122B=0; "
+                       "OC_FLASH_UNSLOTH=0\n")
     end = text.index("\nPYEOF\n", start) + len("\nPYEOF\n")
     return text[start:end]
 
@@ -33,7 +34,8 @@ PINS = "\n".join(line for line in INSTALL.read_text().splitlines()
 def generate(lane, mode, unit_ctx=None, flash_unit=False, model="RadixArk/Qwen3.8-27B-NVFP4",
              pair=None, names=False, flash_running=None, kolibri_unit=False, kolibri_boot=False, doc=False,
              nemotron_unit=False, nemotron_boot=False, super_unit=False, super_boot=False,
-             flocal_unit=False, flocal_boot=False, ornith_unit=False, ornith_boot=False):
+             flocal_unit=False, flocal_boot=False, ornith_unit=False, ornith_boot=False, unsloth_unit=False,
+             unsloth_boot=False, unsloth_slots="-c 524288 -np 2"):
     t = pathlib.Path(tempfile.mkdtemp(prefix="oc-art-"))
     kolibri = t / "qwen38-kolibri.service"
     if kolibri_unit:
@@ -50,6 +52,10 @@ def generate(lane, mode, unit_ctx=None, flash_unit=False, model="RadixArk/Qwen3.
     ornith = t / "qwen38-ornith-122b.service"
     if ornith_unit:
         ornith.write_text("ExecStart=... ornith-ai/Ornith-1.5-122B-NVFP4 --revision f049036f ...\n")
+    unsloth = t / "qwen38-flash-unsloth.service"
+    if unsloth_unit:
+        unsloth.write_text("ExecStart=... -m /root/.cache/huggingface/hub/models--unsloth--Qwen3.8-Flash-Next-GGUF/x.gguf "
+                           f"--alias qwen3.8-flash-next-unsloth {unsloth_slots} ...\n")
     if flash_running:
         (t / "launch-flash.sh").write_text(
             "docker run img python3 -m sglang.launch_server --model-path RadixArk/Qwen3.8-Flash-Next-NVFP4 "
@@ -61,13 +67,15 @@ def generate(lane, mode, unit_ctx=None, flash_unit=False, model="RadixArk/Qwen3.
     if flash_unit:
         flash.write_text("x\n")
     ctx, out = pair or (("205000", "32000") if lane == "flash" else ("700000", "200000"))
-    script = ("set -euo pipefail\ndie(){ echo \"DIE: $*\"; exit 1; }\n" + PINS + "\n"
+    # lanes.sh first, as install.sh sources it: the block reads a llama.cpp unit's window with its llamacpp_window (v1.48)
+    script = ("set -euo pipefail\ndie(){ echo \"DIE: $*\"; exit 1; }\n" + f'. "{REPO}/lanes.sh"\n' + PINS + "\n"
               f'LANE={lane}; CONTEXT_MODE={mode}; SGL_UNIT_PATH="{sgl}"; FLASH_UNIT_PATH="{flash}"\n'
               f'KOLIBRI_UNIT_PATH="{kolibri}"; KOLIBRI_BOOT={1 if kolibri_boot else 0}\n'
               f'NEMOTRON_UNIT_PATH="{nemotron}"; NEMOTRON_BOOT={1 if nemotron_boot else 0}\n'
               f'NEMOTRON_SUPER_UNIT_PATH="{nsuper}"; NEMOTRON_SUPER_BOOT={1 if super_boot else 0}\n'
               f'FLASH_LOCAL_UNIT_PATH="{flocal}"; FLASH_LOCAL_BOOT={1 if flocal_boot else 0}\n'
               f'ORNITH_122B_UNIT_PATH="{ornith}"; ORNITH_122B_BOOT={1 if ornith_boot else 0}\n'
+              f'FLASH_UNSLOTH_UNIT_PATH="{unsloth}"; FLASH_UNSLOTH_BOOT={1 if unsloth_boot else 0}\n'
               f'MODEL_CHOICE={"flash" if lane == "flash" else "stock"}\n'
               # the box's class, which install.sh reads before this block: the block reads it since
               # e65a364, and with no class here every generation stopped on an unbound variable
@@ -347,6 +355,61 @@ class ABoxBootingOrnith(unittest.TestCase):
     def test_without_its_unit_there_is_no_ornith_provider(self):
         d = generate("27b", "1m", unit_ctx=1010000, pair=("551000", "160000"), flocal_unit=True, doc=True)
         self.assertNotIn("ornith-122b", d["provider"])
+
+
+class ABoxBootingFlashUnsloth(unittest.TestCase):
+    """The Qwen3.8 Flash-Next Unsloth GGUF lane (llama.cpp, v1.48), its own provider (its own served model): serving at
+    boot it is opencode's default, its compaction sized from its window; installed beside another lane it is offered;
+    with no unit, absent. Its template is Qwen's with the same fixes, so the 27B's four levels in the 27B's order, and
+    text alone: the lane loads no vision projector."""
+
+    def test_the_default_the_compaction_and_the_provider_are_its(self):
+        d = generate("27b", "1m", unit_ctx=1010000, flash_unit=True, pair=("551000", "160000"),
+                     unsloth_unit=True, unsloth_boot=True, doc=True)
+        self.assertEqual(d["model"], "flash-unsloth/qwen3.8-flash-next-unsloth")
+        ctx, out, *_ = subprocess.run([str(REPO / "oc-limits.sh"), "flash-unsloth"], capture_output=True,
+                                      text=True, check=True).stdout.split()
+        keep = int(subprocess.run([str(REPO / "oc-limits.sh"), "--preserve", ctx], capture_output=True,
+                                  text=True, check=True).stdout)
+        self.assertEqual(d["compaction"]["preserve_recent_tokens"], keep)
+        m = d["provider"]["flash-unsloth"]["models"]["qwen3.8-flash-next-unsloth"]
+        self.assertEqual(m["limit"], {"context": int(ctx), "input": int(ctx), "output": int(out)})
+        self.assertEqual(m["name"], "Qwen3.8-Flash-Next Unsloth UD-Q4_K_XL + DFlash2 (local, 262K)")
+        self.assertFalse(m["attachment"])
+        self.assertEqual(m["modalities"], {"input": ["text"], "output": ["text"]})
+        self.assertEqual(list(m["variants"]), ["lean", "low", "medium", "xhigh"])
+        self.assertEqual(m["variants"]["lean"], {"chat_template_kwargs": {"reasoning_effort": "lean"}})
+        self.assertEqual(d["provider"]["flash-unsloth"]["name"], "Qwen3.8-Flash-Next Unsloth GGUF (DGX Spark)")
+
+    def test_its_pair_is_the_flash_lanes_and_fits_its_window(self):
+        ctx, out, label = subprocess.run([str(REPO / "oc-limits.sh"), "flash-unsloth"], capture_output=True,
+                                         text=True, check=True).stdout.split(" ", 2)
+        fctx, fout, *_ = subprocess.run([str(REPO / "oc-limits.sh"), "flash"], capture_output=True,
+                                        text=True, check=True).stdout.split()
+        self.assertEqual((int(ctx), int(out)), (int(fctx), int(fout)), "the same model and window as the flash lane")
+        self.assertLessEqual(int(ctx) - 20000 + 43863 + int(out), 262144, "threshold + worst step + answer fit the window")
+        self.assertEqual(label.strip(), "local, 262K")
+
+    def test_installed_but_not_at_boot_it_is_offered_and_the_27b_keeps_its_own(self):
+        d = generate("27b", "1m", unit_ctx=1010000, pair=("551000", "160000"), unsloth_unit=True, doc=True)
+        self.assertEqual(d["model"], "qwen38/qwen3.8-27b")
+        self.assertIn("flash-unsloth", d["provider"])
+        self.assertEqual(d["compaction"]["preserve_recent_tokens"], 132000)
+
+    def test_a_window_for_each_request_is_read_as_one_requests(self):
+        # FLASH_UNSLOTH_SHARED=0, the lane's (2026-11-12): -c holds the windows of all its requests, 524,288 tokens for
+        # two, 1,048,576 for four; read as the window, opencode's name said "1M" for a lane whose request gets 262,144.
+        # Shared (-kvu), -c is the one window.
+        for slots in ("-c 524288 -np 2", "-c 1048576 -np 4 -ctk q8_0 -ctv q8_0", "-c 262144 -np 4 -kvu"):
+            with self.subTest(slots=slots):
+                d = generate("27b", "1m", unit_ctx=1010000, pair=("551000", "160000"), unsloth_unit=True,
+                             unsloth_boot=True, unsloth_slots=slots, doc=True)
+                m = d["provider"]["flash-unsloth"]["models"]["qwen3.8-flash-next-unsloth"]
+                self.assertEqual(m["name"], "Qwen3.8-Flash-Next Unsloth UD-Q4_K_XL + DFlash2 (local, 262K)")
+
+    def test_without_its_unit_there_is_no_unsloth_provider(self):
+        d = generate("27b", "1m", unit_ctx=1010000, pair=("551000", "160000"), ornith_unit=True, doc=True)
+        self.assertNotIn("flash-unsloth", d["provider"])
 
 
 

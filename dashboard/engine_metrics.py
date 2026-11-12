@@ -79,6 +79,13 @@ canary was in flight may or may not hold it, so it is dropped: every read kept i
 before or wholly after each canary, and the canary is taken out of exactly the windows that
 hold it. Counters start again from zero with every engine start, so a new engine, or
 counters that went back, start the window again.
+llama.cpp's llama-server (the Unsloth GGUF lane, v1.48) serves its counters as `llamacpp:` with --metrics, behind the
+box's key like every route of it but /health (the cockpit sends the key). They are fewer, and counted per request when
+its prompt or its answer is done (server-task.cpp, b12291): the prompt tokens it computed (`prompt_tokens_total`, the
+cached ones apart, `prompt_tokens_cached_total`) and the time it spent on them, the tokens it generated and the time
+it spent generating them, which make the prefill and the decode speeds with no idle time in them; its draft's
+verification steps and the tokens it accepted, read with vLLM's formula; the requests it serves and defers. It counts
+no request, no first token, no queueing and no abort: the window says those are not counted rather than none.
 """
 from __future__ import annotations
 
@@ -91,31 +98,36 @@ NAMES = {
     # /metrics; a filter belongs to the name it filters, and a key's pair list simply
     # has no entry where an engine publishes no such metric
     "requests": (("sglang:num_requests_total", None), ("vllm:request_success_total", None)),
-    "prompt": (("sglang:prompt_tokens_total", None), ("vllm:prompt_tokens_total", None)),
-    "cached": (("sglang:cached_tokens_total", None), ("vllm:prompt_tokens_cached_total", None)),
+    # llama.cpp counts the prompt tokens it computed apart from the cached ones: the two make the prompt
+    "prompt": (("sglang:prompt_tokens_total", None), ("vllm:prompt_tokens_total", None),
+               ("llamacpp:prompt_tokens_total", None), ("llamacpp:prompt_tokens_cached_total", None)),
+    "cached": (("sglang:cached_tokens_total", None), ("vllm:prompt_tokens_cached_total", None),
+               ("llamacpp:prompt_tokens_cached_total", None)),
     "generated": (("sglang:generation_tokens_total", None),
-                  ("vllm:generation_tokens_total", None)),
+                  ("vllm:generation_tokens_total", None), ("llamacpp:tokens_predicted_total", None)),
     "ttft_sum": (("sglang:time_to_first_token_seconds_sum", None),
                  ("vllm:time_to_first_token_seconds_sum", None)),
     "ttft_count": (("sglang:time_to_first_token_seconds_count", None),
                    ("vllm:time_to_first_token_seconds_count", None)),
     "itl_sum": (("sglang:inter_token_latency_seconds_sum", None),
-                ("vllm:inter_token_latency_seconds_sum", None)),
+                ("vllm:inter_token_latency_seconds_sum", None),
+                # llama.cpp's own clock of the time it spent generating, the first token included
+                ("llamacpp:tokens_predicted_seconds_total", None)),
     # the drafter's verifications: on SGLang every decode step verifies, so generated tokens
     # over them is the accept length. vLLM drafts only on some steps (on Kolibri 816 of 3,444,
     # fixture vllm-metrics-kolibri.txt), so there the accept length is one plus the tokens
     # accepted over the drafts, as its own spec_accept_len reads it: generated over drafts said
     # 6.22 tokens a step where vLLM's counters say 2.99 (found in review, 2026-10-20)
     "ver": (("sglang:spec_verify_calls_total", None),
-            ("vllm:spec_decode_num_drafts_total", None)),
-    # vLLM's drafted tokens it kept; SGLang's accept length needs none (generated over its verify calls)
-    "acc": (("vllm:spec_decode_num_accepted_tokens_total", None),),
+            ("vllm:spec_decode_num_drafts_total", None), ("llamacpp:spec_decode_num_drafts_total", None)),
+    # vLLM's drafted tokens it kept, and llama.cpp's; SGLang's accept length needs none (generated over its verify calls)
+    "acc": (("vllm:spec_decode_num_accepted_tokens_total", None), ("llamacpp:spec_decode_num_accepted_tokens_total", None)),
     # the decoded tokens the inter-token sum timed, on its clock: SGLang's inter-token
     # count is already tokens (each sample adds the tokens of its output, the first
     # output never sampled); vLLM's is steps, so its name here is the generated tokens,
     # counted per iteration like the sum, with each request's first token in them
     "decoded": (("sglang:inter_token_latency_seconds_count", None),
-                ("vllm:generation_tokens_total", None)),
+                ("vllm:generation_tokens_total", None), ("llamacpp:tokens_predicted_total", None)),
     # those first tokens, which vLLM counts in its generated tokens but never times in
     # the inter-token sum (also per iteration); SGLang's count holds none, so no name
     "first": (("vllm:time_to_first_token_seconds_count", None),),
@@ -124,9 +136,9 @@ NAMES = {
     # no idle time and no cache-served token inflates it. vLLM's pair is both observed
     # per finished request, on one clock (found in review, 2026-10-20)
     "pc": (("sglang:realtime_tokens_total", 'mode="prefill_compute"'),
-           ("vllm:request_prefill_kv_computed_tokens_sum", None)),
+           ("vllm:request_prefill_kv_computed_tokens_sum", None), ("llamacpp:prompt_tokens_total", None)),
     "fwd": (("sglang:per_stage_req_latency_seconds_sum", 'stage="prefill_forward"'),
-            ("vllm:request_prefill_time_seconds_sum", None)),
+            ("vllm:request_prefill_time_seconds_sum", None), ("llamacpp:prompt_seconds_total", None)),
     "q_sum": (("sglang:queue_time_seconds_sum", None),
               ("vllm:request_queue_time_seconds_sum", None)),
     "q_count": (("sglang:queue_time_seconds_count", None),
@@ -138,8 +150,9 @@ NAMES = {
 }
 # instantaneous levels, not counters: no delta, the window's own peaks of them
 GAUGES = {
-    "running": (("sglang:num_running_reqs", None), ("vllm:num_requests_running", None)),
-    "queued": (("sglang:num_queue_reqs", None), ("vllm:num_requests_waiting", None)),
+    "running": (("sglang:num_running_reqs", None), ("vllm:num_requests_running", None),
+                ("llamacpp:requests_processing", None)),
+    "queued": (("sglang:num_queue_reqs", None), ("vllm:num_requests_waiting", None), ("llamacpp:requests_deferred", None)),
     "pool": (("sglang:full_token_usage", None), ("vllm:kv_cache_usage_perc", None)),
 }
 # each label set is one scheduler: within a DP group the ranks are state-synchronous and
@@ -162,6 +175,7 @@ _GA_BY_NAME = _by(GAUGES)
 _IDLE_LINE = re.compile(
     r'(?m)^sglang:scheduler_idle_seconds_total(?:\{[^}\n]*\})?[ \t]+(\S+)(?:[ \t]+\S+)?$')
 _VLLM_LINE = re.compile(r"(?m)^vllm:")
+_LLAMACPP_LINE = re.compile(r"(?m)^llamacpp:")
 _SAMPLE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^\n]*\})?[ \t]+(\S+)(?:[ \t]+\S+)?$')
 
 
@@ -193,7 +207,7 @@ def _read(text: str, spec_by_name, keys, max_keys=()):
     out = dict.fromkeys(keys, None)
     engine_page = False
     for line in text.splitlines():
-        if "sglang:" in line or "vllm:" in line:
+        if "sglang:" in line or "vllm:" in line or "llamacpp:" in line:
             engine_page = True
         if not line or line.startswith("#"):
             continue
@@ -231,8 +245,8 @@ def parse(text: str) -> dict | None:
     out = _read(text, _BY_NAME, NAMES)
     if out is not None:
         out["idle_seen"] = _idle_seen(text)
-        # whose page: a vLLM engine counts no client that left, which a zero would hide
-        out["engine"] = "vllm" if _VLLM_LINE.search(text) else "sglang"
+        # whose page: a vLLM engine counts no client that left, which a zero would hide, and llama.cpp counts no request
+        out["engine"] = "vllm" if _VLLM_LINE.search(text) else "llamacpp" if _LLAMACPP_LINE.search(text) else "sglang"
     return out
 
 
@@ -345,7 +359,10 @@ class Window:
 
         out = {
             "watched_s": round(min(self.span, covered), 1),
-            "requests": int(round(d["requests"])),
+            # whose counters: the page says what an engine does not count (vLLM no abort, llama.cpp no request)
+            "engine": b.get("engine"),
+            # llama.cpp counts no request: not counted, said, rather than none
+            "requests": None if b.get("engine") == "llamacpp" else int(round(d["requests"])),
             "prompt_tokens": int(round(d["prompt"])),
             "cached_tokens": int(round(d["cached"])),
             "generated_tokens": int(round(d["generated"])),
@@ -367,14 +384,14 @@ class Window:
             # what a step with a draft netted, its own count bearing no idle time: on SGLang the
             # finished tokens over its verifications, on vLLM one plus the accepted tokens per
             # draft (its own formula); a lane without a drafter verifies and drafts never
-            "acc_len": (1 + d["acc"] / d["ver"] if b.get("engine") == "vllm" else d["generated"] / d["ver"])
+            "acc_len": (1 + d["acc"] / d["ver"] if b.get("engine") in ("vllm", "llamacpp") else d["generated"] / d["ver"])
             if d["ver"] > 0 else None,
             "throughput_tps": d["generated"] / covered if covered > 0 else None,
             # the window's idle share of its span, only when both ends saw the idle
             # counter: an engine that does not publish it must not read as fully busy
             "idle_share": min(1.0, d["idle"] / covered)
             if covered > 0 and a.get("idle_seen") and b.get("idle_seen") else None,
-            "aborted": None if b.get("engine") == "vllm" else int(round(d["aborted"])),
+            "aborted": None if b.get("engine") in ("vllm", "llamacpp") else int(round(d["aborted"])),
             "pool_max": peak("pool"),
             "running_max": peak("running", whole=True),
             "queued_max": peak("queued", whole=True),

@@ -35,7 +35,7 @@ class TheListsFollowTheUnits(unittest.TestCase):
                 enabled = lists(lane)["enabled"]
                 for unit in ("qwen38-kolibri.service", "qwen38-nemotron.service",
                              "qwen38-nemotron-super.service", "qwen38-flash-local.service",
-                             "qwen38-ornith-122b.service"):
+                             "qwen38-ornith-122b.service", "qwen38-flash-unsloth.service"):
                     self.assertIn(unit, enabled)
 
 

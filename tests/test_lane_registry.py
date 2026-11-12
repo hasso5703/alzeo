@@ -81,6 +81,9 @@ SIDE = [x for x in FLAGGED if LANES[x]["installer"] != "install.sh"]
 INSTALL_SH = family(installer="install.sh")
 TEXT = family(kind="text")
 VLLM = family(engine="vllm")
+# the llama.cpp lanes (v1.48): no SGLang route either, an installer that stands on llamacpp-lane.sh, its own opencode
+# provider script, the key on every route but /health
+LLAMACPP = family(engine="llamacpp")
 SGLANG = family(engine="sglang")
 B12X = family(b12x=True)
 NOT_64 = family(fits_64=False)
@@ -865,7 +868,7 @@ class TheRegistryIsWellFormed(unittest.TestCase):
             with self.subTest(lane):
                 self.assertEqual(set(f), fields)
                 self.assertIn(f["kind"], ("text", "image", "video", "speech"))
-                self.assertIn(f["engine"], ("sglang", "vllm", "diffusion", "own"))
+                self.assertIn(f["engine"], ("sglang", "vllm", "llamacpp", "diffusion", "own"))
                 self.assertTrue(set(f["heavy_64"]) <= set(f["targets"]))
                 self.assertTrue(f["fits_64"] or not f["heavy_64"], "a lane that does not fit has no heavy target")
                 self.assertTrue(f["engine"] == "vllm" or not f["b12x"], "b12x is vLLM's")
@@ -944,7 +947,7 @@ class ThePartialSourcesSayTheSame(unittest.TestCase):
         where = f"{py_line(rel, 'ENGINES')} ENGINES"
         # every engine the cockpit names, the speech lane's (its own server) not among them
         p.same(where, engines.ENGINES, [UNIT[x] for x in LANES if LANES[x]["engine"] != "own"])
-        label = {"sglang": "SGLang", "vllm": "vLLM", "diffusion": "SGLang Diffusion"}
+        label = {"sglang": "SGLang", "vllm": "vLLM", "llamacpp": "llama.cpp", "diffusion": "SGLang Diffusion"}
         for unit, e in engines.ENGINES.items():
             f = LANES.get(LANE_OF_UNIT.get(unit))
             if f and e["engine"] != label.get(f["engine"]):
@@ -1193,7 +1196,8 @@ class TheOtherScriptsSayTheSame(unittest.TestCase):
                 continue
             lane, body = LANE_OF_UNIT[unit], t.read_text()
             f = LANES[lane]
-            served, at = finds(t.name, body, r"--served-model-name (\S+)")
+            # llama-server names it with --alias, having no --served-model-name (its common/arg.cpp)
+            served, at = finds(t.name, body, r"--(?:served-model-name|alias) (\S+)")
             ports, at_port = finds(t.name, body, r"--port ([^\s'\"]+)")
             if f["kind"] != "text":
                 if served or "__PORT__" in ports:
@@ -1210,7 +1214,7 @@ class TheOtherScriptsSayTheSame(unittest.TestCase):
         p.same("the text lanes with a template that says a name and a port", sorted(set(says)), sorted(TEXT))
         m, where = one("run.sh", text_of("run.sh"), r"--served-model-name (\S+)")
         p.same(f"{where} --served-model-name (the 27B in the foreground)", [m.group(1)], [LANES["27b"]["served"]])
-        for lane in VLLM:
+        for lane in VLLM + LLAMACPP:
             f = LANES[lane]
             for var, want in (("VLANE", lane), ("VLANE_SERVED", f["served"])):
                 got, line = sh_assign(text_of(f["installer"]), var, f["installer"])
@@ -1248,7 +1252,7 @@ class TheOtherScriptsSayTheSame(unittest.TestCase):
                 for prov, block in out["provider"].items():
                     got[prov] = list(block["models"])
         p.table(f"{', '.join(s.name for s in scripts)}: the provider each prints, and its model", got,
-                {LANES[x]["provider"]: [LANES[x]["served"]] for x in VLLM})
+                {LANES[x]["provider"]: [LANES[x]["served"]] for x in VLLM + LLAMACPP})
         rel = "oc-point-default.py"
         got, where = py_at(rel, "LABEL")
         p.same(f"{where} LABEL", got, targets_of(TEXT))
@@ -1427,10 +1431,11 @@ class TheCockpitSaysTheSame(unittest.TestCase):
                units_of(B12X))
         # the b12x lanes in a sentence: b12xName names each by LANE_NAME, which the registry holds above
         one(rel, text, r"^const b12xName = u => `the \$\{LANE_NAME\[u\]\} lane`;$")
-        # the sources of the Logs view: the containers of the lanes that run in one (SGLang's and vLLM's,
+        # the sources of the Logs view: the containers of the lanes that run in one (SGLang's, vLLM's and llama.cpp's,
         # not the venvs of the diffusion lanes), and the journals of every lane's unit, each by its name
         html = "dashboard/static/index.html"
-        for group, what, lanes in (("Serving containers", "container", [x for x in TURNS if LANES[x]["engine"] in ("sglang", "vllm")]),
+        in_one = ("sglang", "vllm", "llamacpp")
+        for group, what, lanes in (("Serving containers", "container", [x for x in TURNS if LANES[x]["engine"] in in_one]),
                                    ("Unit journals", "journal", TURNS)):
             m, where = one(html, text_of(html), rf'<optgroup label="{group}">(.*?)</optgroup>')
             options = dict(re.findall(r'<option value="([^"]+)">([^<]*)</option>', m.group(1)))
@@ -1452,7 +1457,8 @@ class TheCockpitSaysTheSame(unittest.TestCase):
             name = node.targets[0].id if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) else ""
             if name.endswith("_CANNOT") and name[:-len("_CANNOT")] + "_UNIT" in units:
                 tables[name] = LANE_OF_UNIT.get(units[name[:-len("_CANNOT")] + "_UNIT"])
-        p.same(f"{py} the lanes of its <LANE>_CANNOT tables", floor(list(tables.values()), f"{py} <LANE>_CANNOT"), VLLM)
+        p.same(f"{py} the lanes of its <LANE>_CANNOT tables", floor(list(tables.values()), f"{py} <LANE>_CANNOT"),
+               VLLM + LLAMACPP)
         got, where = finds(js, text_of(js), r"^const ([A-Z0-9_]+_CANNOT) = \{")
         p.same(f"{where} its <LANE>_CANNOT tables, the server's", got, tables)
         for name, lane in tables.items():
@@ -1678,7 +1684,7 @@ class TheNamesAreTheOfficialOnes(unittest.TestCase):
                         named.setdefault(kind, set()).add(name)
                         if name not in titles:
                             p.append(f"{rel}:{n} says {said!r}, which is no lane's official name")
-            lacks = [LANES[x]["title"] for x in VLLM if LANES[x]["title"] not in named.get(kind, ())]
+            lacks = [LANES[x]["title"] for x in VLLM + LLAMACPP if LANES[x]["title"] not in named.get(kind, ())]
             if lacks:
                 p.append(f"no string of the cockpit's {kind} names \"the <name> lane\" of {lacks}")
         p.check(self)

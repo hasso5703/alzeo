@@ -9,9 +9,9 @@ Each version was read in the pinned image itself on the reference box on 2026-11
 image's Python, or the image's /workspace/build-metadata.yaml), never from a tag name alone.
 
 reports: the version string the engine itself says when it serves the pinned image (SGLang's /server_info, vLLM's
-/version: its package's own version, read in each image the same day, in the image the lane runs). The page says the
-serving lane's engine by what it reports: a version other than this one is an image of the operator's. None for the
-diffusion lanes, whose version the cockpit does not read."""
+/version: its package's own version, read in each image the same day, in the image the lane runs; llama.cpp's /props,
+its build_info). The page says the serving lane's engine by what it reports: a version other than this one is an image
+of the operator's. None for the diffusion lanes, whose version the cockpit does not read."""
 
 ENGINES = {
     # install.sh IMAGE ; the image's sglang distribution says 0.5.22
@@ -49,6 +49,16 @@ ENGINES = {
         "engine": "vLLM", "version": "nightly 77154ca6 + b12x 1.5.1", "reports": "0.32.0rc1.dev100+g77154ca61",
         "pin": "vllm/vllm-openai@sha256:1ee85ca80e0fc110017d79ea2081a0cbef9a208a05d7f22724801bcf6a956620",
         "unit_image": "qwen38-nemotron:vllm77154ca6-b12x1.5.1-1ee85ca80e0fc"},
+    # install-flash-unsloth.sh FLASH_UNSLOTH_IMAGE: llama.cpp's own server image for arm64 with CUDA 13
+    # (server-cuda13), its labels saying version b12316 and revision 5d4c8eeb24db049acf74bd6f354bed6eaeffc7dc (docker
+    # image inspect on the reference box, 2026-11-12). llama.cpp numbers its versions by build, and its /props says
+    # build_info as "b<build>-<commit>" (common/build-info.cpp.in), the commit as git shortens it: 9 characters in
+    # b12282's image, measured first, whose llama-server --version said "version: 0.9.0-dev (build 12282, commit
+    # aa75ff323)" (2026-11-11), hence 5d4c8eeb2 here. TODO(measure): the build_info /props says on the box, at the
+    # lane's first proof.
+    "qwen38-flash-unsloth.service": {
+        "engine": "llama.cpp", "version": "b12316", "reports": "b12316-5d4c8eeb2",
+        "pin": "ghcr.io/ggml-org/llama.cpp@sha256:a5600a59c704208491adbb96505454a8d3d4cd3a9db48b03cf2760b660b7fd16"},
     # install-image.sh and install-video.sh WHEEL: SGLang's diffusion runtime in the lane's own venv
     "qwen38-image.service": {"engine": "SGLang Diffusion", "version": "0.5.21", "reports": None,
                              "pin": "sglang[diffusion]==0.5.21"},

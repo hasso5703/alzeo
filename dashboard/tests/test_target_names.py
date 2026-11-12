@@ -18,13 +18,16 @@ PINS = {"stock": ("install.sh", "STOCK_REPO"), "uncensored": ("install.sh", "UNC
         "nemotron": ("install-nemotron.sh", "NEMOTRON_BOLT_REPO"),
         "nemotron-super": ("install-nemotron-super.sh", "NEMOTRON_SUPER_REPO"),
         "ornith-122b": ("install-ornith-122b.sh", "ORNITH_122B_REPO"),
+        "flash-unsloth": ("install-flash-unsloth.sh", "FLASH_UNSLOTH_REPO"),
         "image": ("install-image.sh", "IMAGE_MODEL_PIN"), "image-turbo": ("install-image.sh", "IMAGE_TURBO_PIN"),
         "video": ("install-video.sh", "VIDEO_MODEL_PIN")}
 # a repository's owner on Hugging Face, written as its own pages write its name
 PUBLISHER = {"RadixArk": "RadixArk", "edp1096": "edp1096", "Qwen": "Qwen", "nvidia": "NVIDIA", "dealignai": "dealignai",
-             "Aleph-Alpha": "Aleph Alpha", "Quantinine": "Quantinine", "ornith-ai": "Ornith AI", "MiniMaxAI": "MiniMax"}
-# a precision the repository's name does not say: Aleph Alpha's own release of Kolibri-1 is its FP8 build
-UNSAID = {"kolibri": {"fp8"}}
+             "Aleph-Alpha": "Aleph Alpha", "Quantinine": "Quantinine", "ornith-ai": "Ornith AI", "MiniMaxAI": "MiniMax",
+             "unsloth": "Unsloth"}
+# a precision the repository's name does not say: Aleph Alpha's own release of Kolibri-1 is its FP8 build, and
+# Unsloth's GGUF repository holds every quantization of the model, the lane serving its UD-Q4_K_XL folder
+UNSAID = {"kolibri": {"fp8"}, "flash-unsloth": {"ud", "q4", "k", "xl"}}
 
 
 def table(name):

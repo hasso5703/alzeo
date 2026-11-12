@@ -1,0 +1,18 @@
+warn: LLAMA_ARG_HOST environment variable is set, but will be overwritten by command line argument --host
+warn: LLAMA_ARG_PORT environment variable is set, but will be overwritten by command line argument --port
+0.00.572.241 I srv  llama_server: initializing ...
+0.00.572.253 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.572.574 W srv  server_setup: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
+0.00.574.172 I srv    load_model: loading model '/mnt/ssd/huggingface/hub/models--unsloth--Qwen3.8-Flash-Next-GGUF/snapshots/d96201194f103c906994f283f504209dc8d2a10c/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf'
+0.00.948.748 E llama_init_from_model: failed to initialize the context: dflash requires ctx_other to be set (this warning is normal during memory fitting)
+0.00.978.249 W operator(): failed to measure the memory of the extra model, fitting without it: failed to create llama_context from model
+3.33.159.594 I cmn          init: llama threadpool init, n_threads = 20
+3.33.362.334 I common_speculative_init_result: loading draft model '/mnt/ssd/huggingface/hub/models--ggml-org--Qwen3.8-Flash-Next-GGUF/snapshots/b9ad2d241b433afd84a423760ccf11929c9a71fa/dflash-Qwen3.8-Flash-Next-Q8_0.gguf'
+3.33.936.147 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 262144, kv_unified = 'false'
+3.33.936.215 I common_speculative_impl_draft_dflash: adding speculative implementation 'draft-dflash'
+3.33.936.216 I common_speculative_impl_draft_dflash: - n_max=7, n_min=0, p_min=0.00
+3.33.936.217 I common_speculative_impl_draft_dflash: - block_size=8, mask_token_id=248077, n_extract=5, sample_from_anchor=true
+3.33.940.077 I common_speculative_impl_draft_dflash: DFlash target features via device buffer
+3.33.978.279 W srv          init: chat template supports preserving reasoning, it is enabled by default (may use more tokens, disable via --no-reasoning-preserve)
+3.33.978.426 I srv  server_run_i: model loaded
+3.33.978.488 I srv  server_on_li: listening on http://127.0.0.1:30098

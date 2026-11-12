@@ -231,8 +231,9 @@ def fit(pool: int, ceiling: int = 0, window: int = 0,
 
 
 # The flash lane's served name: its own one-prompt ceiling applies while it serves (v6.25), and
-# while the Flash FP4-Local lane serves, whose window is the flash lane's (v6.43).
-FLASH_SERVED_NAMES = ("qwen3.8-flash-next", "qwen3.8-flash-next-fp4")
+# while the Flash FP4-Local lane serves, whose window is the flash lane's (v6.43), and the Unsloth
+# GGUF lane, the same model at the same window on llama.cpp (v6.55).
+FLASH_SERVED_NAMES = ("qwen3.8-flash-next", "qwen3.8-flash-next-fp4", "qwen3.8-flash-next-unsloth")
 
 
 def ceiling_from_env(text: str, served=None, window: int = 0) -> int:

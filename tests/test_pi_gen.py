@@ -294,6 +294,36 @@ class PiGen(unittest.TestCase):
         self.assertEqual(settings["modelThinkingLevels"]["nemotron/nemotron-3.5-bolt"], "high")
         self.assertEqual(settings["modelThinkingLevels"]["qwen38/qwen3.8-27b"], "off", "the Qwen lanes as before")
 
+    def test_the_unsloth_lane_starts_in_omp_at_its_templates_default_and_takes_text(self):
+        # the Qwen3.8 Flash-Next Unsloth GGUF lane's template is its GGUF's, patched with the Qwen fixes (v1.48): its
+        # default read beside these configs, as the 27B's is; and it loads no vision projector, so text alone
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("oc_flash_unsloth", REPO / "oc-flash-unsloth.py")
+        ocu = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ocu)
+        os.makedirs(self.out, exist_ok=True)
+        art = json.loads(json.dumps(ARTIFACT))
+        art["provider"]["flash-unsloth"] = ocu.provider("http://127.0.0.1:30001/v1", os.path.join(self.out, "api-key"),
+                                                        205000, 32000, "Qwen3.8-Flash-Next Unsloth (local, 262K)")
+        art["model"] = "flash-unsloth/qwen3.8-flash-next-unsloth"
+        with open(self.art, "w") as f:
+            f.write(json.dumps(art))
+        template = pathlib.Path(self.out, "chat-template-flash-unsloth.jinja")
+        for default, level in (("lean", "minimal"), ("xhigh", "xhigh")):
+            with self.subTest(default=default):
+                template.write_text("{%- set e = reasoning_effort|default('" + default + "') %}\n")
+                self.gen()
+                models, settings = self.read_pi()
+                self.assertEqual(settings["modelThinkingLevels"]["flash-unsloth/qwen3.8-flash-next-unsloth"], "off")
+                entry = models["providers"]["flash-unsloth"]["models"][0]
+                self.assertEqual(entry["input"], ["text"])
+                self.assertNotIn("inputLimits", entry)
+                omp_models, _ = self.read_omp()
+                omp_entry = omp_models["providers"]["flash-unsloth"]["models"][0]
+                self.assertEqual(omp_entry["thinking"], {"mode": "effort", "efforts": ["minimal", "low", "medium", "xhigh"],
+                                                         "defaultLevel": level})
+                self.assertEqual(omp_entry["compat"]["reasoningEffortMap"], {"minimal": "lean"})
+
     def test_ornith_is_sent_its_levels_as_they_are_starts_at_high_and_takes_images(self):
         # Ornith's template reads enable_thinking alone: the proxy turns none and minimal off and every
         # other level on (keepalive-proxy.py, ornith_effort), so pi sends its levels as they are, its off

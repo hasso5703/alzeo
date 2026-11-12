@@ -17,6 +17,7 @@
 #   ./switch-model.sh nemotron-super  # nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 and its drafter (the same image)
 #   ./switch-model.sh flash-local     # nvidia/Qwen3.8-Flash-Next-FP4-Local, NVIDIA's FP4 build of the flash model (vLLM + b12x)
 #   ./switch-model.sh ornith-122b     # ornith-ai/Ornith-1.5-122B-NVFP4, Ornith AI's mixture of experts (vLLM + b12x)
+#   ./switch-model.sh flash-unsloth   # unsloth/Qwen3.8-Flash-Next-GGUF, Unsloth's GGUF of the flash model (llama.cpp)
 #   ./switch-model.sh <target> --fetch  # that target's checkpoint only, into the cache; nothing else changes
 #
 # Within the 27B lane (stock, uncensored, fp8, uncensored-fp8) it does what it
@@ -57,7 +58,7 @@ _ENV_HF_CACHE="${HF_CACHE:-}"      # before the pins below give it install.sh's 
 # 27B lane and restarting what follows it, where the usage was all anyone wanted (found
 # in review, 2026-09-24). MODEL_CHOICE= still names one, as install.sh takes it.
 CHOICE="${1:-${MODEL_CHOICE:-}}"
-case "$CHOICE" in stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|ornith-122b) ;; *) printf 'usage: ./switch-model.sh <stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|ornith-122b> [--fetch]\n' >&2; [ -z "$CHOICE" ] && exit 2; die "unknown target: $CHOICE" ;; esac
+case "$CHOICE" in stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|ornith-122b|flash-unsloth) ;; *) printf 'usage: ./switch-model.sh <stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|ornith-122b|flash-unsloth> [--fetch]\n' >&2; [ -z "$CHOICE" ] && exit 2; die "unknown target: $CHOICE" ;; esac
 # --fetch: the target's checkpoint only, fetched as a switch fetches it (the cache first,
 # resumable, its room checked), and nothing else: no unit, no boot, no engine, no record.
 # Library's Download runs it, and a lane installed without its weights gets them so.
@@ -195,7 +196,7 @@ if [ "$CHOICE" = "kolibri" ] || [ "$CHOICE" = "kolibri-nvfp4" ]; then
   done
   # The loop variable ends in UNIT_NAME on purpose: CI checks every
   # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist.
-  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
       echo "disabling $TEXT_UNIT_NAME at boot (unit file kept for switching back)"
       sudo systemctl disable "$TEXT_UNIT_NAME"
@@ -204,7 +205,7 @@ if [ "$CHOICE" = "kolibri" ] || [ "$CHOICE" = "kolibri-nvfp4" ]; then
   sudo systemctl enable "$KOLIBRI_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$KOLIBRI_UNIT_NAME"
   sudo systemctl daemon-reload
   RUNNING=""
-  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
   done
   printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$KOL_MODEL" "$KOLIBRI_UNIT_NAME"
@@ -401,7 +402,7 @@ if [ "$CHOICE" = "nemotron" ] || [ "$CHOICE" = "nemotron-super" ]; then
   done
   # The loop variable ends in UNIT_NAME on purpose: CI checks every
   # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist.
-  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     [ "$TEXT_UNIT_NAME" = "$NEM_UNIT_NAME" ] && continue
     if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
       echo "disabling $TEXT_UNIT_NAME at boot (unit file kept for switching back)"
@@ -415,7 +416,7 @@ if [ "$CHOICE" = "nemotron" ] || [ "$CHOICE" = "nemotron-super" ]; then
   fi
   sudo systemctl daemon-reload
   RUNNING=""
-  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     [ "$u" = "$NEM_UNIT_NAME" ] && continue
     systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
   done
@@ -540,7 +541,7 @@ if [ "$CHOICE" = "flash-local" ]; then
   done
   # The loop variable ends in UNIT_NAME on purpose: CI checks every
   # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist.
-  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-ornith-122b.service; do
+  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
       echo "disabling $TEXT_UNIT_NAME at boot (unit file kept for switching back)"
       sudo systemctl disable "$TEXT_UNIT_NAME"
@@ -549,7 +550,7 @@ if [ "$CHOICE" = "flash-local" ]; then
   sudo systemctl enable "$FLASH_LOCAL_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$FLASH_LOCAL_UNIT_NAME"
   sudo systemctl daemon-reload
   RUNNING=""
-  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-ornith-122b.service; do
+  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
   done
   printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_UNIT_NAME"
@@ -677,7 +678,7 @@ if [ "$CHOICE" = "ornith-122b" ]; then
   done
   # The loop variable ends in UNIT_NAME on purpose: CI checks every
   # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist.
-  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service; do
+  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-flash-unsloth.service; do
     if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
       echo "disabling $TEXT_UNIT_NAME at boot (unit file kept for switching back)"
       sudo systemctl disable "$TEXT_UNIT_NAME"
@@ -686,7 +687,7 @@ if [ "$CHOICE" = "ornith-122b" ]; then
   sudo systemctl enable "$ORNITH_122B_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$ORNITH_122B_UNIT_NAME"
   sudo systemctl daemon-reload
   RUNNING=""
-  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service; do
+  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-flash-unsloth.service; do
     systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
   done
   printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$ORNITH_122B_REPO" "$ORNITH_122B_UNIT_NAME"
@@ -740,6 +741,125 @@ if [ "$CHOICE" = "ornith-122b" ]; then
   fi
   echo "Clients reach it through the proxy on :30001 with the box's key, as model ornith-1.5-122b."
   echo "Switch back:      ./switch-model.sh stock   (or any other target)"
+  exit 0
+fi
+
+# ── The Qwen3.8 Flash-Next Unsloth GGUF lane: Unsloth's GGUF of the flash model, on llama.cpp ───────────────
+# A text lane for the proxy, served by llama.cpp's own server, under the vLLM lanes' contract: verify its files (the
+# first switch fetches them), put the unit for them in place, make it the one unit enabled at boot, never start or
+# stop anything, print the exact commands. The files and the unit come from the lane's installer, with no sudo
+# (install-flash-unsloth.sh --fetch, then --stage): its GGUF files are pinned there one by one and fetched with
+# gguf-fetch.py, its image having no Python; one renderer, so a switch after the pins moved, or after the cache
+# moved, puts in the unit an install would.
+FLASH_UNSLOTH_UNIT="/etc/systemd/system/qwen38-flash-unsloth.service"
+FLASH_UNSLOTH_UNIT_NAME="qwen38-flash-unsloth.service"
+# Rewritten with sudo, so staged at a fixed path the cockpit's exact-argv sudoers allowlist names,
+# as the other lanes' units are.
+FLU_STAGE="$CONFIG_DIR/qwen38-flash-unsloth.service.switch-stage"
+if [ "$CHOICE" = "flash-unsloth" ]; then
+  [ -f "$FLASH_UNSLOTH_UNIT" ] || die "the Qwen3.8 Flash-Next Unsloth GGUF lane is not installed on this box (no $FLASH_UNSLOTH_UNIT). Install it once: ./install.sh --with-flash-unsloth (about 117 GB)"
+  # The model, its pinned revision and the image, from the lane's installer, the one place they are declared.
+  eval "$(grep -E '^FLASH_UNSLOTH_(REPO|REV|IMAGE)=' "$REPO_DIR/install-flash-unsloth.sh" || true)"
+  for _v in FLASH_UNSLOTH_REPO FLASH_UNSLOTH_REV FLASH_UNSLOTH_IMAGE; do
+    eval "[ -n \"\${$_v:-}\" ]" || die "install-flash-unsloth.sh no longer defines $_v (repo layout changed?)"
+  done
+  unset _v
+  FLU_HF="$(unit_hf_cache "$FLASH_UNSLOTH_UNIT")"
+  FLU_HF="${FLU_HF:-$HF_CACHE}"
+  printf '\n\033[1;36m── Verifying %s @ %s and its draft in the cache (resumable)\033[0m\n' "$FLASH_UNSLOTH_REPO" "${FLASH_UNSLOTH_REV:0:12}"
+  # As the user, by the lane's installer: the files pinned there, the room checked before a byte comes, the token
+  # read from the environment (gguf-fetch.py), so it is in no argv. The image is not needed for it, so a --fetch
+  # of the Library works before the lane's first Load pulled it.
+  HF_CACHE="$FLU_HF" bash "$REPO_DIR/install-flash-unsloth.sh" --fetch \
+    || die "the Qwen3.8 Flash-Next Unsloth GGUF files could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
+  fetched "$FLASH_UNSLOTH_REPO @ ${FLASH_UNSLOTH_REV:0:12}"
+  docker image inspect "$FLASH_UNSLOTH_IMAGE" >/dev/null 2>&1 \
+    || die "the Qwen3.8 Flash-Next Unsloth GGUF lane's image (${FLASH_UNSLOTH_IMAGE:0:40}...) is missing: ./prepare-lane.sh flash-unsloth pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
+  # its chat template, and its unit for these files
+  HF_CACHE="$FLU_HF" bash "$REPO_DIR/install-flash-unsloth.sh" --stage "$FLU_STAGE" \
+    || { rm -f "$FLU_STAGE"; die "the Qwen3.8 Flash-Next Unsloth GGUF unit could not be prepared (the lines above say why)"; }
+  FLU_REWRITTEN=""
+  if ! cmp -s "$FLU_STAGE" "$FLASH_UNSLOTH_UNIT"; then
+    diff "$FLU_STAGE" "$FLASH_UNSLOTH_UNIT" || true   # show exactly what changes
+    sudo install -m 644 "$FLU_STAGE" "$FLASH_UNSLOTH_UNIT"
+    FLU_REWRITTEN=1
+  fi
+  rm -f "$FLU_STAGE"
+  # Which lane this box served at boot, written down before it is disabled: removing this lane
+  # later gives the boot back to it (its installer's --uninstall).
+  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service; do
+    if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
+      text_lane_note "$TEXT_UNIT_NAME"; break   # both enabled: the 27B, as install.sh follows it
+    fi
+  done
+  # The loop variable ends in UNIT_NAME on purpose: CI checks every
+  # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist.
+  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+    if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
+      echo "disabling $TEXT_UNIT_NAME at boot (unit file kept for switching back)"
+      sudo systemctl disable "$TEXT_UNIT_NAME"
+    fi
+  done
+  sudo systemctl enable "$FLASH_UNSLOTH_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$FLASH_UNSLOTH_UNIT_NAME"
+  sudo systemctl daemon-reload
+  RUNNING=""
+  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+    systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
+  done
+  printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$FLASH_UNSLOTH_REPO" "$FLASH_UNSLOTH_UNIT_NAME"
+  if [ -n "$RUNNING" ]; then
+    echo "Effective after:  sudo systemctl stop $RUNNING && sudo systemctl start $FLASH_UNSLOTH_UNIT_NAME   (or next reboot)"
+  elif systemctl is-active --quiet "$FLASH_UNSLOTH_UNIT_NAME" 2>/dev/null; then
+    if [ -n "$FLU_REWRITTEN" ]; then
+      echo "Effective after:  sudo systemctl restart $FLASH_UNSLOTH_UNIT_NAME   (it serves the previous unit until then)"
+    else
+      echo "Its unit already named these files. Started before it did, the lane serves what it loaded: sudo systemctl restart $FLASH_UNSLOTH_UNIT_NAME"
+    fi
+  else
+    echo "Effective after:  sudo systemctl start $FLASH_UNSLOTH_UNIT_NAME   (or next reboot; ready in about 4 to 7 min)"
+  fi
+  # opencode follows the lane, as on a text switch: the lane's provider becomes the default of the
+  # generated config and of the one opencode reads, and the server that reads them restarts when
+  # they changed. A box installed with --no-opencode is left alone.
+  if [ -f "$CONFIG_DIR/opencode.off" ]; then
+    echo "opencode integration is off on this box (./install.sh --no-opencode): default model left alone"
+  else
+    FLU_OC_SUM="$({ cat "$CONFIG_DIR/opencode.json" "$HOME/.config/opencode/opencode.json" 2>/dev/null || true; } | sha256sum)"
+    # the window of the unit just staged (its -c), the context of every request at a time
+    FLU_WINDOW="$(llamacpp_window "$FLASH_UNSLOTH_UNIT")"
+    FLU_PAIR="$("$REPO_DIR/oc-limits.sh" flash-unsloth)" || FLU_PAIR=""
+    read -r FLU_CTX FLU_OUT _ <<< "$FLU_PAIR"
+    FLU_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label flash-unsloth "${FLU_WINDOW:-262144}" || true)"
+    FLU_PORT="$({ grep -m1 -oE 'PROXY_PORT=[0-9]+|keepalive-proxy.py [0-9]+' /etc/systemd/system/qwen38-keepalive.service 2>/dev/null || true; } | grep -oE '[0-9]+$' || true)"
+    FLU_SRC="$(mktemp)"
+    if [ -n "$FLU_PAIR" ] && python3 "$REPO_DIR/oc-flash-unsloth.py" "http://127.0.0.1:${FLU_PORT:-30001}/v1" "$CONFIG_DIR/api-key" \
+         "$FLU_CTX" "$FLU_OUT" "${FLU_NAME:-Qwen3.8-Flash-Next Unsloth UD-Q4_K_XL + DFlash2 (local, 262K)}" > "$FLU_SRC"; then
+      # The compaction block is global: sized from this lane's window as every text switch sizes
+      # it from its own. pi's keepRecentTokens follows (pi-gen).
+      FLU_KEEP="$("$REPO_DIR/oc-limits.sh" --preserve "$FLU_CTX")" || FLU_KEEP=""
+      for OC_JSON in "$CONFIG_DIR/opencode.json" "$HOME/.config/opencode/opencode.json"; do
+        [ -f "$OC_JSON" ] || continue
+        python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" --add-providers "$FLU_SRC" >/dev/null || true
+        python3 "$REPO_DIR/oc-point-default.py" "$OC_JSON" flash-unsloth flash-unsloth "${FLU_WINDOW:-262144}" \
+          || echo "NOTE: could not update $OC_JSON (hand-edited?); set its \"model\" field yourself"
+        [ -n "$FLU_KEEP" ] && { python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" --compaction "$FLU_KEEP" \
+          || echo "NOTE: could not update the compaction block in $OC_JSON; check it by hand ($FLU_KEEP)"; }
+      done
+    fi
+    rm -f "$FLU_SRC"
+    if [ -d "$CONFIG_DIR/pi" ] || [ -d "$CONFIG_DIR/omp" ]; then
+      python3 "$REPO_DIR/pi-gen.py" --config "$CONFIG_DIR/opencode.json" --out "$CONFIG_DIR" \
+        || echo "NOTE: could not regenerate the pi/omp artifacts; run ./pi-gen.py by hand"
+    fi
+    if [ "$FLU_OC_SUM" != "$({ cat "$CONFIG_DIR/opencode.json" "$HOME/.config/opencode/opencode.json" 2>/dev/null || true; } | sha256sum)" ] \
+       && systemctl list-unit-files opencode-web.service >/dev/null 2>&1 && systemctl is-active --quiet opencode-web.service; then
+      sudo systemctl restart opencode-web.service \
+        && echo "opencode-web.service restarted so it reads the new default" \
+        || echo "NOTE: could not restart opencode-web.service; restart it by hand"
+    fi
+  fi
+  echo "Clients reach it through the proxy on :30001 with the box's key, as model qwen3.8-flash-next-unsloth."
+  echo "Switch back:      ./switch-model.sh flash   (or any other target)"
   exit 0
 fi
 
@@ -845,7 +965,7 @@ if [ "$CHOICE" = "image" ] || [ "$CHOICE" = "image-turbo" ]; then
   # The loop variable ends in UNIT_NAME on purpose: CI checks every
   # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist,
   # and a variable called $u would have walked straight past it.
-  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
       echo "disabling $TEXT_UNIT_NAME at boot (unit file kept for switching back)"
       sudo systemctl disable "$TEXT_UNIT_NAME"
@@ -854,7 +974,7 @@ if [ "$CHOICE" = "image" ] || [ "$CHOICE" = "image-turbo" ]; then
   sudo systemctl enable "$IMAGE_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$IMAGE_UNIT_NAME"
   sudo systemctl daemon-reload
   RUNNING=""
-  for u in qwen38-sglang.service qwen38-flash.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+  for u in qwen38-sglang.service qwen38-flash.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
   done
   printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$IMG_MODEL" "$IMAGE_UNIT_NAME"
@@ -984,7 +1104,7 @@ if [ "$CHOICE" = "video" ]; then
   # The loop variable ends in UNIT_NAME on purpose: CI checks every
   # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist,
   # and a variable called $u would have walked straight past it.
-  for OTHER_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+  for OTHER_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     if systemctl is-enabled --quiet "$OTHER_UNIT_NAME" 2>/dev/null; then
       echo "disabling $OTHER_UNIT_NAME at boot (unit file kept for switching back)"
       sudo systemctl disable "$OTHER_UNIT_NAME"
@@ -993,7 +1113,7 @@ if [ "$CHOICE" = "video" ]; then
   sudo systemctl enable "$VIDEO_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$VIDEO_UNIT_NAME"
   sudo systemctl daemon-reload
   RUNNING=""
-  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
     systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
   done
   printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$VID_MODEL" "$VIDEO_UNIT_NAME"
@@ -1353,6 +1473,11 @@ if [ -f "$ORNITH_122B_UNIT" ] && systemctl is-enabled --quiet "$ORNITH_122B_UNIT
   echo "disabling $ORNITH_122B_UNIT_NAME at boot (unit file kept for switching back)"
   sudo systemctl disable "$ORNITH_122B_UNIT_NAME"
 fi
+# The Qwen3.8 Flash-Next Unsloth GGUF lane is the tenth: the same reason.
+if [ -f "$FLASH_UNSLOTH_UNIT" ] && systemctl is-enabled --quiet "$FLASH_UNSLOTH_UNIT_NAME" 2>/dev/null; then
+  echo "disabling $FLASH_UNSLOTH_UNIT_NAME at boot (unit file kept for switching back)"
+  sudo systemctl disable "$FLASH_UNSLOTH_UNIT_NAME"
+fi
 sudo systemctl enable "$TARGET_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$TARGET_UNIT_NAME"
 text_lane_note "$TARGET_UNIT_NAME"
 sudo systemctl daemon-reload
@@ -1487,6 +1612,7 @@ systemctl is-active --quiet "$NEMOTRON_UNIT_NAME" 2>/dev/null && RUNNING="$NEMOT
 systemctl is-active --quiet "$NEMOTRON_SUPER_UNIT_NAME" 2>/dev/null && RUNNING="$NEMOTRON_SUPER_UNIT_NAME"
 systemctl is-active --quiet "$FLASH_LOCAL_UNIT_NAME" 2>/dev/null && RUNNING="$FLASH_LOCAL_UNIT_NAME"
 systemctl is-active --quiet "$ORNITH_122B_UNIT_NAME" 2>/dev/null && RUNNING="$ORNITH_122B_UNIT_NAME"
+systemctl is-active --quiet "$FLASH_UNSLOTH_UNIT_NAME" 2>/dev/null && RUNNING="$FLASH_UNSLOTH_UNIT_NAME"
 printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$TARGET_REPO" "$TARGET_UNIT_NAME"
 # The target is the operator's choice from here (2026-10-17): an installed.json that a run of
 # v1.36.0 or later wrote records it, and a switch back to the recommended target erases the

@@ -524,6 +524,8 @@ WITH_FLASH_LOCAL=0
 NO_FLASH_LOCAL=0
 WITH_ORNITH_122B=0
 NO_ORNITH_122B=0
+WITH_FLASH_UNSLOTH=0
+NO_FLASH_UNSLOTH=0
 ALL_WEIGHTS=0
 PLAN_ONLY=0
 # --recommended (v1.36.0): every setting the list before step 1 compares, but the site's (the
@@ -560,6 +562,8 @@ for arg in "$@"; do
     --no-flash-local) NO_FLASH_LOCAL=1 ;;
     --with-ornith-122b) WITH_ORNITH_122B=1 ;;
     --no-ornith-122b) NO_ORNITH_122B=1 ;;
+    --with-flash-unsloth) WITH_FLASH_UNSLOTH=1 ;;
+    --no-flash-unsloth) NO_FLASH_UNSLOTH=1 ;;
     --all-weights) ALL_WEIGHTS=1 ;;
     --with-claude-warmup)
       echo "NOTE: --with-claude-warmup was removed in v1.3 (the repo's client story moved to opencode)."
@@ -574,6 +578,7 @@ Usage: ./install.sh [--no-start] [--no-service] [--no-opencode | --with-opencode
                    [--no-nemotron-super | --with-nemotron-super]
                    [--no-flash-local | --with-flash-local]
                    [--no-ornith-122b | --with-ornith-122b]
+                   [--no-flash-unsloth | --with-flash-unsloth]
                    [--all-weights] [--plan] [--recommended]
 
 Run it as yourself. Never with sudo in front: it calls sudo itself for the
@@ -593,9 +598,10 @@ Bolt, on vLLM, 51), the Nemotron Super lane (NVIDIA's Nemotron 3.5 Super VL
 on vLLM, in the Nemotron lane's image: 77 beside it, else 102), the Flash
 FP4-Local lane (NVIDIA's FP4 build of the flash model, on vLLM, 121; 33 more
 when the HF cache is on another disk than the home directory's, for the copy
-of its n-gram table) and the Ornith 122B lane (Ornith AI's Ornith 1.5 122B,
-on vLLM, in the Qwen3.8 Flash-Next FP4-Local lane's image: 78 beside it, else 96). The lane that
-serves proves it serves before the run ends; on a new box the 27B takes 58 GB
+of its n-gram table), the Ornith 122B lane (Ornith AI's Ornith 1.5 122B,
+on vLLM, in the Qwen3.8 Flash-Next FP4-Local lane's image: 78 beside it, else 96)
+and the Qwen3.8 Flash-Next Unsloth GGUF lane (Unsloth's GGUF of the flash
+model, on llama.cpp, 117). The lane that serves proves it serves before the run ends; on a new box the 27B takes 58 GB
 of disk, about 39 GB of
 downloads (about 6 to 7 minutes at 100 MB/s). A lane installed whole (--all-weights, --with-<lane>)
 that does not fit on the disk is left out and named at the end, with the
@@ -648,11 +654,14 @@ without a terminal.
   --no-ornith-122b      leave the Ornith 1.5 122B lane (vLLM, 96 GB) out of this
                         run, the same way (./install-ornith-122b.sh --uninstall)
   --with-ornith-122b    install it whole now and prove it
+  --no-flash-unsloth    leave the Qwen3.8 Flash-Next Unsloth GGUF lane (llama.cpp, 117 GB)
+                        out of this run, the same way (./install-flash-unsloth.sh --uninstall)
+  --with-flash-unsloth  install it whole now and prove it
   --all-weights         install every lane whole now (the flash beside the 27B,
                         the image, video, Kolibri, both Nemotron, the Flash
-                        FP4-Local and the Ornith lanes), runtime and weights, about
-                        930 GB of disk (963 with the cache on another disk), and prove
-                        each new one
+                        FP4-Local, the Ornith and the Unsloth GGUF lanes), runtime
+                        and weights, about 1047 GB of disk (1080 with the cache on
+                        another disk), and prove each new one
                         (without it, each is prepared at its first Load from
                         the cockpit; --with-<lane> does the same for that one
                         lane)
@@ -790,6 +799,7 @@ NEMOTRON_UNIT_PATH="/etc/systemd/system/qwen38-nemotron.service"
 NEMOTRON_SUPER_UNIT_PATH="/etc/systemd/system/qwen38-nemotron-super.service"
 FLASH_LOCAL_UNIT_PATH="/etc/systemd/system/qwen38-flash-local.service"
 ORNITH_122B_UNIT_PATH="/etc/systemd/system/qwen38-ornith-122b.service"
+FLASH_UNSLOTH_UNIT_PATH="/etc/systemd/system/qwen38-flash-unsloth.service"
 for _p in "$SGL_UNIT_PATH" "$FLASH_UNIT_PATH"; do
   if [ -f "$_p" ] && [ ! -r "$_p" ]; then
     echo "NOTE: an installed unit ($_p) exists but is not readable (pre-v1.2.3 installs used mode 600),"
@@ -955,7 +965,21 @@ if [ -z "$SECONDARY" ] && systemctl is-enabled --quiet qwen38-ornith-122b.servic
     echo "without making one of them the boot lane again. Switch from the cockpit when you want another."
   fi
 fi
-SIDE_BOOT=$((IMAGE_BOOT + VIDEO_BOOT + KOLIBRI_BOOT + NEMOTRON_BOOT + NEMOTRON_SUPER_BOOT + FLASH_LOCAL_BOOT + ORNITH_122B_BOOT))
+# And the Qwen3.8 Flash-Next Unsloth GGUF lane, under the same promise.
+FLASH_UNSLOTH_BOOT=0
+if [ -z "$SECONDARY" ] && systemctl is-enabled --quiet qwen38-flash-unsloth.service 2>/dev/null \
+   && [ "$SGL_ENABLED" -eq 0 ] && [ "$FLASH_ENABLED" -eq 0 ]; then
+  if [ -n "$_ENV_MODEL_CHOICE" ]; then
+    echo "MODEL_CHOICE=$_ENV_MODEL_CHOICE given on a box booting the Qwen3.8 Flash-Next Unsloth GGUF lane: making that text lane the boot lane again."
+  elif [ "$RECOMMENDED" -eq 1 ]; then
+    echo "--recommended on a box booting the Qwen3.8 Flash-Next Unsloth GGUF lane: the 27B lane becomes the boot lane again, as on a new box."
+  else
+    FLASH_UNSLOTH_BOOT=1
+    echo "The Qwen3.8 Flash-Next Unsloth GGUF lane is this box's boot lane: this run brings the other lanes up to date"
+    echo "without making one of them the boot lane again. Switch from the cockpit when you want another."
+  fi
+fi
+SIDE_BOOT=$((IMAGE_BOOT + VIDEO_BOOT + KOLIBRI_BOOT + NEMOTRON_BOOT + NEMOTRON_SUPER_BOOT + FLASH_LOCAL_BOOT + ORNITH_122B_BOOT + FLASH_UNSLOTH_BOOT))
 # Which text lane to bring up to date on that path. Both text units can be on disk with
 # neither enabled, since a switch to a side lane disables both, so enablement cannot say which
 # one was in use; switch-model.sh writes it down instead (lanes.sh: one record since v1.30, the
@@ -1330,6 +1354,9 @@ fi
 if [ "$NO_ORNITH_122B" -eq 1 ] && [ "$WITH_ORNITH_122B" -eq 1 ]; then
   printf -- '--no-ornith-122b and --with-ornith-122b contradict each other (drop one flag)\n' >&2; exit 1
 fi
+if [ "$NO_FLASH_UNSLOTH" -eq 1 ] && [ "$WITH_FLASH_UNSLOTH" -eq 1 ]; then
+  printf -- '--no-flash-unsloth and --with-flash-unsloth contradict each other (drop one flag)\n' >&2; exit 1
+fi
 
 # --no-start and --no-service both return before the image step, so the flag would be
 # accepted and silently do nothing. Say so here rather than at the end of a long install.
@@ -1366,6 +1393,11 @@ fi
 if [ "$WITH_ORNITH_122B" -eq 1 ] && { [ "$NO_START" -eq 1 ] || [ "$NO_SERVICE" -eq 1 ]; }; then
   printf -- '--with-ornith-122b needs the full install: it installs a systemd unit and proves it serves.\n' >&2
   printf -- 'Run ./install.sh without --no-start/--no-service, or ./install-ornith-122b.sh on its own.\n' >&2
+  exit 1
+fi
+if [ "$WITH_FLASH_UNSLOTH" -eq 1 ] && { [ "$NO_START" -eq 1 ] || [ "$NO_SERVICE" -eq 1 ]; }; then
+  printf -- '--with-flash-unsloth needs the full install: it installs a systemd unit and proves it serves.\n' >&2
+  printf -- 'Run ./install.sh without --no-start/--no-service, or ./install-flash-unsloth.sh on its own.\n' >&2
   exit 1
 fi
 # the same for the whole box: --no-service did none of it, --no-start the other text lane alone
@@ -1412,7 +1444,7 @@ lane_title(){  # $1 a lane, by its flag's name: the name a run says
     27b) echo "Qwen3.8 27B" ;; flash) echo "Qwen3.8 Flash-Next" ;; image) echo "image (Qwen-Image 2.1)" ;;
     video) echo "video (MiniMax-H3)" ;; kolibri) echo "Kolibri-1" ;; nemotron) echo "Nemotron 3.5 Bolt" ;;
     nemotron-super) echo "Nemotron 3.5 Super VL" ;; flash-local) echo "Qwen3.8 Flash-Next FP4-Local" ;;
-    ornith-122b) echo "Ornith 1.5 122B" ;; *) echo "$1" ;;
+    ornith-122b) echo "Ornith 1.5 122B" ;; flash-unsloth) echo "Qwen3.8 Flash-Next Unsloth GGUF" ;; *) echo "$1" ;;
   esac
 }
 lane_wanted(){  # $1 lane (image, video, flash, 27b), $2 --no-$1 given, $3 --with-$1 given: sets WANT
@@ -1441,7 +1473,7 @@ serves_anyway(){ [ "$1" = "$LANE" ] && [ "$SIDE_BOOT" -eq 0 ]; }   # $1 a lane l
 # Said of it, without "brought up to date": on a GPU outside its ATS mode the flash lane that serves
 # gets its units only, and the run then says so (issue #54; both said, found in review, 2026-10-21).
 serves_said(){ echo "The ${1/27b/27B} lane is the one this run serves: --no-$1 leaves nothing out of it."; }
-WANT_IMAGE=0; WANT_VIDEO=0; WANT_FLASH=0; WANT_27B=0; WANT_KOLIBRI=0; WANT_NEMOTRON=0; WANT_NEMOTRON_SUPER=0; WANT_FLASH_LOCAL=0; WANT_ORNITH_122B=0
+WANT_IMAGE=0; WANT_VIDEO=0; WANT_FLASH=0; WANT_27B=0; WANT_KOLIBRI=0; WANT_NEMOTRON=0; WANT_NEMOTRON_SUPER=0; WANT_FLASH_LOCAL=0; WANT_ORNITH_122B=0; WANT_FLASH_UNSLOTH=0
 TOO_BIG=()
 if [ -z "$SECONDARY" ]; then
   lane_wanted image "$NO_IMAGE" "$WITH_IMAGE"; WANT_IMAGE="$WANT"
@@ -1453,6 +1485,7 @@ if [ -z "$SECONDARY" ]; then
   lane_wanted nemotron-super "$NO_NEMOTRON_SUPER" "$WITH_NEMOTRON_SUPER"; WANT_NEMOTRON_SUPER="$WANT"
   lane_wanted flash-local "$NO_FLASH_LOCAL" "$WITH_FLASH_LOCAL"; WANT_FLASH_LOCAL="$WANT"
   lane_wanted ornith-122b "$NO_ORNITH_122B" "$WITH_ORNITH_122B"; WANT_ORNITH_122B="$WANT"
+  lane_wanted flash-unsloth "$NO_FLASH_UNSLOTH" "$WITH_FLASH_UNSLOTH"; WANT_FLASH_UNSLOTH="$WANT"
 fi
 too_big(){ local l; for l in ${TOO_BIG[@]+"${TOO_BIG[@]}"}; do [ "$l" = "$1" ] && return 0; done; return 1; }   # $1 a lane
 if [ "${#TOO_BIG[@]}" -gt 0 ]; then
@@ -1518,7 +1551,18 @@ side_pulled_begun(){  # $1 the lane's unit
   hf="$(unit_hf_cache "$1")"
   [ -n "$repo" ] && [ -n "$hf" ] && [ -d "$hf/hub/models--${repo//\//--}" ]
 }
-side_begun(){  # $1 lane (image, video, kolibri, nemotron, nemotron-super, flash-local, ornith-122b)
+# The Qwen3.8 Flash-Next Unsloth GGUF lane the same way: the image its unit names and its GGUF repository's folder in
+# the cache the unit mounts, which the unit names by its snapshot's path (llama-server takes files, not a repository
+# and a revision): the first path, its model's, the line that names it naming its draft's too.
+side_gguf_begun(){  # $1 the lane's unit
+  local img dir hf
+  img="$({ grep -m1 -oE '[^ ]+@sha256:[0-9a-f]{64}' "$1" 2>/dev/null || true; })"
+  { [ -n "$img" ] && docker image inspect "$img" >/dev/null 2>&1; } || return 1
+  dir="$({ grep -m1 -oE 'hub/models--[^/ ]+/snapshots/[0-9a-f]{40}/' "$1" 2>/dev/null || true; } | head -n1 | cut -d/ -f2)"
+  hf="$(unit_hf_cache "$1")"
+  [ -n "$dir" ] && [ -n "$hf" ] && [ -d "$hf/hub/$dir" ]
+}
+side_begun(){  # $1 lane (image, video, kolibri, nemotron, nemotron-super, flash-local, ornith-122b, flash-unsloth)
   case "$1" in
     image|video) [ -x "$(side_lane_dir "$1")/venv/bin/python" ] ;;
     kolibri) side_kolibri_image ;;
@@ -1526,6 +1570,7 @@ side_begun(){  # $1 lane (image, video, kolibri, nemotron, nemotron-super, flash
     nemotron-super) side_nemotron_begun "$NEMOTRON_SUPER_UNIT_PATH" ;;
     flash-local) side_pulled_begun "$FLASH_LOCAL_UNIT_PATH" ;;
     ornith-122b) side_pulled_begun "$ORNITH_122B_UNIT_PATH" ;;
+    flash-unsloth) side_gguf_begun "$FLASH_UNSLOTH_UNIT_PATH" ;;
     *) return 1 ;;
   esac
 }
@@ -1806,6 +1851,8 @@ if [ -z "$SECONDARY" ] && ss -tlnH 2>/dev/null | awk '{print $4}' | grep -q ":$P
     echo "Note: the Qwen3.8 Flash-Next FP4-Local lane is serving on :$PORT; this run updates the lanes beside it."
   elif docker inspect qwen38-ornith-122b --format '{{join .Args " "}}' 2>/dev/null | grep -qE -- "--port ${PORT}(\s|$)"; then
     echo "Note: the Ornith 1.5 122B lane is serving on :$PORT; this run updates the lanes beside it."
+  elif docker inspect qwen38-flash-unsloth --format '{{join .Args " "}}' 2>/dev/null | grep -qE -- "--port ${PORT}(\s|$)"; then
+    echo "Note: the Qwen3.8 Flash-Next Unsloth GGUF lane is serving on :$PORT; this run updates the lanes beside it."
   else
     die "Port $PORT is already in use by another program (see: ss -tlnp | grep :$PORT). Free it, or install with PORT=<other> ./install.sh"
   fi
@@ -2349,7 +2396,7 @@ OC_PORT="$PROXY_PORT"
 # box (nobody should be offered a model that nothing serves); the model being
 # installed right now always appears. The default model is the one being
 # installed. json.dump writes the file: no hand-escaping.
-OC_27B=0; OC_FLASH=0; OC_KOLIBRI=0; OC_NEMOTRON=0; OC_NEMOTRON_SUPER=0; OC_FLASH_LOCAL=0; OC_ORNITH_122B=0
+OC_27B=0; OC_FLASH=0; OC_KOLIBRI=0; OC_NEMOTRON=0; OC_NEMOTRON_SUPER=0; OC_FLASH_LOCAL=0; OC_ORNITH_122B=0; OC_FLASH_UNSLOTH=0
 { [ "$LANE" = "27b" ] || [ -f "$SGL_UNIT_PATH" ]; } && OC_27B=1
 { [ "$LANE" = "flash" ] || [ -f "$FLASH_UNIT_PATH" ]; } && OC_FLASH=1
 # The Kolibri lane is installed at the end of a run (install-kolibri.sh): its provider comes
@@ -2404,6 +2451,17 @@ if [ "$OC_ORNITH_122B" -eq 1 ]; then
   OC_ORNITH_122B_CTX="${OC_ORNITH_122B_PAIR%% *}"; OC_ORNITH_122B_OUT="$(echo "$OC_ORNITH_122B_PAIR" | cut -d' ' -f2)"
   OC_ORNITH_122B_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label ornith-122b 1048576 || true)"
 fi
+# The Qwen3.8 Flash-Next Unsloth GGUF lane, its own provider (its own served model) with its unit.
+[ -f "$FLASH_UNSLOTH_UNIT_PATH" ] && OC_FLASH_UNSLOTH=1
+OC_FLASH_UNSLOTH_CTX=""; OC_FLASH_UNSLOTH_OUT=""; OC_FLASH_UNSLOTH_NAME=""; OC_FLASH_UNSLOTH_WINDOW=""
+if [ "$OC_FLASH_UNSLOTH" -eq 1 ]; then
+  # its unit's window, the -c its llama-server takes
+  OC_FLASH_UNSLOTH_WINDOW="$(llamacpp_window "$FLASH_UNSLOTH_UNIT_PATH")"
+  OC_FLASH_UNSLOTH_PAIR="$("$REPO_DIR/oc-limits.sh" flash-unsloth)" \
+    || die "oc-limits.sh refused flash-unsloth (repo bug: please open an issue)"
+  OC_FLASH_UNSLOTH_CTX="${OC_FLASH_UNSLOTH_PAIR%% *}"; OC_FLASH_UNSLOTH_OUT="$(echo "$OC_FLASH_UNSLOTH_PAIR" | cut -d' ' -f2)"
+  OC_FLASH_UNSLOTH_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label flash-unsloth "${OC_FLASH_UNSLOTH_WINDOW:-262144}" || true)"
+fi
 # How much of a conversation survives a compaction verbatim, from the same table.
 OC_KEEP="$("$REPO_DIR/oc-limits.sh" --preserve "$OC_CTX")" \
   || die "oc-limits.sh --preserve failed for $OC_CTX (repo bug: please open an issue)"
@@ -2454,6 +2512,10 @@ fi
 if [ "$ORNITH_122B_BOOT" -eq 1 ] && [ "$OC_ORNITH_122B" -eq 1 ] && [ -n "$OC_ORNITH_122B_CTX" ]; then
   OC_KEEP="$("$REPO_DIR/oc-limits.sh" --preserve "$OC_ORNITH_122B_CTX")" \
     || die "oc-limits.sh --preserve failed for $OC_ORNITH_122B_CTX (repo bug: please open an issue)"
+fi
+if [ "$FLASH_UNSLOTH_BOOT" -eq 1 ] && [ "$OC_FLASH_UNSLOTH" -eq 1 ] && [ -n "$OC_FLASH_UNSLOTH_CTX" ]; then
+  OC_KEEP="$("$REPO_DIR/oc-limits.sh" --preserve "$OC_FLASH_UNSLOTH_CTX")" \
+    || die "oc-limits.sh --preserve failed for $OC_FLASH_UNSLOTH_CTX (repo bug: please open an issue)"
 fi
 # The other engine's limits, for when both providers are present: the 27B block
 # keeps its context-mode limits, flash always serves its native window. A flash install
@@ -2523,6 +2585,8 @@ OC_FLASH_LOCAL="$OC_FLASH_LOCAL" OC_FLASH_LOCAL_CTX="$OC_FLASH_LOCAL_CTX" OC_FLA
 OC_FLASH_LOCAL_NAME="$OC_FLASH_LOCAL_NAME" OC_FLASH_LOCAL_BOOT="$FLASH_LOCAL_BOOT" \
 OC_ORNITH_122B="$OC_ORNITH_122B" OC_ORNITH_122B_CTX="$OC_ORNITH_122B_CTX" OC_ORNITH_122B_OUT="$OC_ORNITH_122B_OUT" \
 OC_ORNITH_122B_NAME="$OC_ORNITH_122B_NAME" OC_ORNITH_122B_BOOT="$ORNITH_122B_BOOT" \
+OC_FLASH_UNSLOTH="$OC_FLASH_UNSLOTH" OC_FLASH_UNSLOTH_CTX="$OC_FLASH_UNSLOTH_CTX" OC_FLASH_UNSLOTH_OUT="$OC_FLASH_UNSLOTH_OUT" \
+OC_FLASH_UNSLOTH_NAME="$OC_FLASH_UNSLOTH_NAME" OC_FLASH_UNSLOTH_BOOT="$FLASH_UNSLOTH_BOOT" \
 OC_KEEP="$OC_KEEP" OC_PIN="$OPENCODE_PIN" OC_DENY="$(python3 "$REPO_DIR/oc-merge-limits.py" --deny-permission)" \
 OC_CONFIG_DIR="$CONFIG_DIR" python3 - <<'PYEOF' || die "could not write the opencode provider config"
 import json
@@ -2636,6 +2700,16 @@ if os.environ.get("OC_ORNITH_122B") == "1":
     providers["ornith-122b"] = oco.provider(base_url, f"{cfg_dir}/api-key",
                                             int(os.environ["OC_ORNITH_122B_CTX"]), int(os.environ["OC_ORNITH_122B_OUT"]),
                                             os.environ.get("OC_ORNITH_122B_NAME") or "Ornith 1.5 122B (local, 1M)")
+if os.environ.get("OC_FLASH_UNSLOTH") == "1":
+    # one definition, shared with switch-model.sh (oc-flash-unsloth.py says why)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("oc_flash_unsloth", os.path.join(os.environ["OC_REPO_DIR"], "oc-flash-unsloth.py"))
+    ocu = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ocu)
+    providers["flash-unsloth"] = ocu.provider(base_url, f"{cfg_dir}/api-key",
+                                              int(os.environ["OC_FLASH_UNSLOTH_CTX"]), int(os.environ["OC_FLASH_UNSLOTH_OUT"]),
+                                              os.environ.get("OC_FLASH_UNSLOTH_NAME")
+                                              or "Qwen3.8-Flash-Next Unsloth UD-Q4_K_XL + DFlash2 (local, 262K)")
 
 default = "flashnext/qwen3.8-flash-next" if lane == "flash" else "qwen38/qwen3.8-27b"
 if os.environ.get("OC_KOLIBRI_BOOT") == "1" and "kolibri" in providers:
@@ -2648,6 +2722,8 @@ if os.environ.get("OC_FLASH_LOCAL_BOOT") == "1" and "flash-local" in providers:
     default = "flash-local/qwen3.8-flash-next-fp4"
 if os.environ.get("OC_ORNITH_122B_BOOT") == "1" and "ornith-122b" in providers:
     default = "ornith-122b/ornith-1.5-122b"
+if os.environ.get("OC_FLASH_UNSLOTH_BOOT") == "1" and "flash-unsloth" in providers:
+    default = "flash-unsloth/qwen3.8-flash-next-unsloth"
 # Compaction is global in opencode.json, not per-model, so it is sized from the
 # INSTALLED target (oc-limits.sh --preserve) and rewritten by every install and
 # switch. preserve_recent_tokens exists because opencode's own default clamps it
@@ -2705,7 +2781,7 @@ if [ ! -e "$OC_USER_CFG" ]; then
   install -m 644 "$CONFIG_DIR/opencode.json" "$OC_USER_CFG"
   echo "  no opencode config yet: installed this repo's at $OC_USER_CFG"
   # the copy carries the shell rules for the hosts of Cohere's report already (deny_permission)
-elif ! grep -qsE '"(qwen38|flashnext|kolibri|nemotron|nemotron-super|flash-local|ornith-122b)"' "$OC_USER_CFG"; then
+elif ! grep -qsE '"(qwen38|flashnext|kolibri|nemotron|nemotron-super|flash-local|ornith-122b|flash-unsloth)"' "$OC_USER_CFG"; then
   # the user's own config, with none of this repo's providers in it: theirs to merge
   echo "  your $OC_USER_CFG has no provider for this box: merge the \"qwen38\" (or \"flashnext\")"
   echo "  block from $CONFIG_DIR/opencode.json into it (docs/opencode.md). oc and the Agent tab"
@@ -2801,6 +2877,10 @@ fi
 if [ "$ORNITH_122B_BOOT" -eq 1 ] && [ "$OC_ORNITH_122B" -eq 1 ]; then
   # the Ornith 1.5 122B lane is this box's lane: opencode's default stays on it
   OC_POINT_LANE=ornith-122b; OC_POINT_CHOICE=ornith-122b; OC_POINT_WINDOW=1048576
+fi
+if [ "$FLASH_UNSLOTH_BOOT" -eq 1 ] && [ "$OC_FLASH_UNSLOTH" -eq 1 ]; then
+  # the Qwen3.8 Flash-Next Unsloth GGUF lane is this box's lane: opencode's default stays on it
+  OC_POINT_LANE=flash-unsloth; OC_POINT_CHOICE=flash-unsloth; OC_POINT_WINDOW="${OC_FLASH_UNSLOTH_WINDOW:-262144}"
 fi
 python3 "$REPO_DIR/oc-point-default.py" "$CONFIG_DIR/opencode.json" "$OC_POINT_LANE" "$OC_POINT_CHOICE" "$OC_POINT_WINDOW" \
   || die "could not point the generated opencode config at the installed lane"
@@ -3193,6 +3273,10 @@ if [ -z "$SECONDARY" ] && [ "$ORNITH_122B_BOOT" -eq 0 ] && systemctl is-enabled 
   echo "disabling the Ornith 1.5 122B lane at boot (unit kept, switch back anytime from the cockpit)"
   sudo systemctl disable qwen38-ornith-122b.service
 fi
+if [ -z "$SECONDARY" ] && [ "$FLASH_UNSLOTH_BOOT" -eq 0 ] && systemctl is-enabled --quiet qwen38-flash-unsloth.service 2>/dev/null; then
+  echo "disabling the Qwen3.8 Flash-Next Unsloth GGUF lane at boot (unit kept, switch back anytime from the cockpit)"
+  sudo systemctl disable qwen38-flash-unsloth.service
+fi
 KEEPALIVE_UNIT="qwen38-keepalive.service"
 KA_CHANGED=0      # whether this run changed what the proxy runs (see its restart below)
 # The proxy, its code and its unit are the serving run's (see the secondary run above).
@@ -3278,7 +3362,7 @@ if [ -n "$SECONDARY" ]; then
   fi
   exit 0
 fi
-if [ -z "$ATS_CANNOT" ] && [ "$IMAGE_BOOT" -eq 0 ] && [ "$VIDEO_BOOT" -eq 0 ] && [ "$KOLIBRI_BOOT" -eq 0 ] && [ "$NEMOTRON_BOOT" -eq 0 ] && [ "$NEMOTRON_SUPER_BOOT" -eq 0 ] && [ "$FLASH_LOCAL_BOOT" -eq 0 ] && [ "$ORNITH_122B_BOOT" -eq 0 ]; then
+if [ -z "$ATS_CANNOT" ] && [ "$IMAGE_BOOT" -eq 0 ] && [ "$VIDEO_BOOT" -eq 0 ] && [ "$KOLIBRI_BOOT" -eq 0 ] && [ "$NEMOTRON_BOOT" -eq 0 ] && [ "$NEMOTRON_SUPER_BOOT" -eq 0 ] && [ "$FLASH_LOCAL_BOOT" -eq 0 ] && [ "$ORNITH_122B_BOOT" -eq 0 ] && [ "$FLASH_UNSLOTH_BOOT" -eq 0 ]; then
   sudo systemctl enable "$UNIT_NAME"
   text_lane_note "$UNIT_NAME"
 else
@@ -3339,6 +3423,10 @@ else
     "$REPO_DIR/install-ornith-122b.sh" "$(side_mode ornith-122b "$WITH_ORNITH_122B")" \
       || echo "NOTE: the Ornith 1.5 122B lane did not install or update; retry with ./install-ornith-122b.sh --no-smoke"
   fi
+  if [ "$WANT_FLASH_UNSLOTH" -eq 1 ]; then
+    "$REPO_DIR/install-flash-unsloth.sh" "$(side_mode flash-unsloth "$WITH_FLASH_UNSLOTH")" \
+      || echo "NOTE: the Qwen3.8 Flash-Next Unsloth GGUF lane did not install or update; retry with ./install-flash-unsloth.sh --no-smoke"
+  fi
   SERVING_LANE=""
   [ "$IMAGE_BOOT" -eq 1 ] && SERVING_LANE="image"
   [ "$VIDEO_BOOT" -eq 1 ] && SERVING_LANE="video"
@@ -3347,6 +3435,7 @@ else
   [ "$NEMOTRON_SUPER_BOOT" -eq 1 ] && SERVING_LANE="Nemotron 3.5 Super VL"
   [ "$FLASH_LOCAL_BOOT" -eq 1 ] && SERVING_LANE="Qwen3.8 Flash-Next FP4-Local"
   [ "$ORNITH_122B_BOOT" -eq 1 ] && SERVING_LANE="Ornith 1.5 122B"
+  [ "$FLASH_UNSLOTH_BOOT" -eq 1 ] && SERVING_LANE="Qwen3.8 Flash-Next Unsloth GGUF"
   if [ -n "$ATS_CANNOT" ]; then
     step "Done: this box is up to date, and its flash lane, which this GPU cannot start, was not started"
     echo "  why       : $ATS_CANNOT"
@@ -3680,7 +3769,7 @@ except Exception as e:
     # New here, and proved when this run builds it whole: a lane with no unit yet, or one whose
     # runtime is not on the box (installed on demand, its units only: --all-weights on such a
     # box built every lane and proved none, found in review, 2026-10-15).
-    IMAGE_FRESH=0; VIDEO_FRESH=0; KOLIBRI_FRESH=0; NEMOTRON_FRESH=0; NEMOTRON_SUPER_FRESH=0; FLASH_LOCAL_FRESH=0; ORNITH_122B_FRESH=0
+    IMAGE_FRESH=0; VIDEO_FRESH=0; KOLIBRI_FRESH=0; NEMOTRON_FRESH=0; NEMOTRON_SUPER_FRESH=0; FLASH_LOCAL_FRESH=0; ORNITH_122B_FRESH=0; FLASH_UNSLOTH_FRESH=0
     { [ -f /etc/systemd/system/qwen38-image.service ] && side_begun image; } || IMAGE_FRESH=1
     { [ -f /etc/systemd/system/qwen38-video.service ] && side_begun video; } || VIDEO_FRESH=1
     { [ -f "$KOLIBRI_UNIT_PATH" ] && side_begun kolibri; } || KOLIBRI_FRESH=1
@@ -3688,7 +3777,8 @@ except Exception as e:
     { [ -f "$NEMOTRON_SUPER_UNIT_PATH" ] && side_begun nemotron-super; } || NEMOTRON_SUPER_FRESH=1
     { [ -f "$FLASH_LOCAL_UNIT_PATH" ] && side_begun flash-local; } || FLASH_LOCAL_FRESH=1
     { [ -f "$ORNITH_122B_UNIT_PATH" ] && side_begun ornith-122b; } || ORNITH_122B_FRESH=1
-    IMAGE_STATE=off; VIDEO_STATE=off; KOLIBRI_STATE=off; NEMOTRON_STATE=off; NEMOTRON_SUPER_STATE=off; FLASH_LOCAL_STATE=off; ORNITH_122B_STATE=off
+    { [ -f "$FLASH_UNSLOTH_UNIT_PATH" ] && side_begun flash-unsloth; } || FLASH_UNSLOTH_FRESH=1
+    IMAGE_STATE=off; VIDEO_STATE=off; KOLIBRI_STATE=off; NEMOTRON_STATE=off; NEMOTRON_SUPER_STATE=off; FLASH_LOCAL_STATE=off; ORNITH_122B_STATE=off; FLASH_UNSLOTH_STATE=off
     if [ "$WANT_IMAGE" -eq 1 ]; then
       step "Qwen-Image 2.1 lane (text-to-image, editing, native RGBA)"
       IMAGE_MODE="$(side_mode image "$WITH_IMAGE")"
@@ -3745,12 +3835,20 @@ except Exception as e:
         echo "NOTE: the Ornith 1.5 122B lane did not install (the lines above say why); the rest goes on."
       fi
     fi
+    if [ "$WANT_FLASH_UNSLOTH" -eq 1 ]; then
+      step "Qwen3.8 Flash-Next Unsloth GGUF lane (Unsloth's GGUF of the flash model, on llama.cpp)"
+      FLASH_UNSLOTH_MODE="$(side_mode flash-unsloth "$WITH_FLASH_UNSLOTH")"
+      if "$REPO_DIR/install-flash-unsloth.sh" "$FLASH_UNSLOTH_MODE"; then FLASH_UNSLOTH_STATE=installed; [ "$FLASH_UNSLOTH_MODE" = --units-only ] && FLASH_UNSLOTH_STATE=units; else
+        FLASH_UNSLOTH_STATE=failed
+        echo "NOTE: the Qwen3.8 Flash-Next Unsloth GGUF lane did not install (the lines above say why); the rest goes on."
+      fi
+    fi
     # What to prove: what this run installed for the first time, or what was asked for
     # by name (--with-<lane>, which also proves a lane already there).
     SECOND_WITH=0
     { [ "$SECOND_LANE" = flash ] && [ "$WITH_FLASH" -eq 1 ]; } && SECOND_WITH=1
     { [ "$SECOND_LANE" = 27b ] && [ "$WITH_27B" -eq 1 ]; } && SECOND_WITH=1
-    PROVE_SECOND=0; PROVE_IMAGE=0; PROVE_VIDEO=0; PROVE_KOLIBRI=0; PROVE_NEMOTRON=0; PROVE_NEMOTRON_SUPER=0; PROVE_FLASH_LOCAL=0; PROVE_ORNITH_122B=0
+    PROVE_SECOND=0; PROVE_IMAGE=0; PROVE_VIDEO=0; PROVE_KOLIBRI=0; PROVE_NEMOTRON=0; PROVE_NEMOTRON_SUPER=0; PROVE_FLASH_LOCAL=0; PROVE_ORNITH_122B=0; PROVE_FLASH_UNSLOTH=0
     { [ "$SECOND_STATE" = installed ] && { [ "$SECOND_NEW" -eq 1 ] || [ "$SECOND_WITH" -eq 1 ]; }; } && PROVE_SECOND=1
     { [ "$IMAGE_STATE" = installed ] && { [ "$IMAGE_FRESH" -eq 1 ] || [ "$WITH_IMAGE" -eq 1 ]; }; } && PROVE_IMAGE=1
     { [ "$VIDEO_STATE" = installed ] && { [ "$VIDEO_FRESH" -eq 1 ] || [ "$WITH_VIDEO" -eq 1 ]; }; } && PROVE_VIDEO=1
@@ -3759,7 +3857,8 @@ except Exception as e:
     { [ "$NEMOTRON_SUPER_STATE" = installed ] && { [ "$NEMOTRON_SUPER_FRESH" -eq 1 ] || [ "$WITH_NEMOTRON_SUPER" -eq 1 ]; }; } && PROVE_NEMOTRON_SUPER=1
     { [ "$FLASH_LOCAL_STATE" = installed ] && { [ "$FLASH_LOCAL_FRESH" -eq 1 ] || [ "$WITH_FLASH_LOCAL" -eq 1 ]; }; } && PROVE_FLASH_LOCAL=1
     { [ "$ORNITH_122B_STATE" = installed ] && { [ "$ORNITH_122B_FRESH" -eq 1 ] || [ "$WITH_ORNITH_122B" -eq 1 ]; }; } && PROVE_ORNITH_122B=1
-    if [ $((PROVE_SECOND + PROVE_IMAGE + PROVE_VIDEO + PROVE_KOLIBRI + PROVE_NEMOTRON + PROVE_NEMOTRON_SUPER + PROVE_FLASH_LOCAL + PROVE_ORNITH_122B)) -gt 0 ]; then
+    { [ "$FLASH_UNSLOTH_STATE" = installed ] && { [ "$FLASH_UNSLOTH_FRESH" -eq 1 ] || [ "$WITH_FLASH_UNSLOTH" -eq 1 ]; }; } && PROVE_FLASH_UNSLOTH=1
+    if [ $((PROVE_SECOND + PROVE_IMAGE + PROVE_VIDEO + PROVE_KOLIBRI + PROVE_NEMOTRON + PROVE_NEMOTRON_SUPER + PROVE_FLASH_LOCAL + PROVE_ORNITH_122B + PROVE_FLASH_UNSLOTH)) -gt 0 ]; then
       step "Proving the new lanes serve: the ${LANE/27b/27B} lane stops meanwhile, then comes back"
       sudo systemctl stop "$UNIT_NAME"
       if [ "$PROVE_SECOND" -eq 1 ]; then
@@ -3788,6 +3887,9 @@ except Exception as e:
       fi
       if [ "$PROVE_ORNITH_122B" -eq 1 ]; then
         if "$REPO_DIR/install-ornith-122b.sh"; then ORNITH_122B_STATE=proved; else ORNITH_122B_STATE=unproved; fi
+      fi
+      if [ "$PROVE_FLASH_UNSLOTH" -eq 1 ]; then
+        if "$REPO_DIR/install-flash-unsloth.sh"; then FLASH_UNSLOTH_STATE=proved; else FLASH_UNSLOTH_STATE=unproved; fi
       fi
       step "The ${LANE/27b/27B} lane again"
       prove_text_lane "$UNIT_NAME" "$SMOKE_MODEL" \
@@ -3907,6 +4009,7 @@ except Exception as e:
     lane_line "Super VL   " "$NEMOTRON_SUPER_STATE" nemotron-super nemotron-super "102 GB" "$NEMOTRON_SUPER_UNIT_PATH"
     lane_line "FP4-Local  " "$FLASH_LOCAL_STATE" flash-local flash-local "121 GB" "$FLASH_LOCAL_UNIT_PATH"
     lane_line "Ornith 122B" "$ORNITH_122B_STATE" ornith-122b ornith-122b "96 GB" "$ORNITH_122B_UNIT_PATH"
+    lane_line "Unsloth    " "$FLASH_UNSLOTH_STATE" flash-unsloth flash-unsloth "117 GB" "$FLASH_UNSLOTH_UNIT_PATH"
     [ "$LANE" = "27b" ] && echo "  Benchmark  : ./bench.sh"
     # A 64 GB DGX Spark serves Nemotron 3.5 Bolt (Hasan, 2026-10-24): there the 27B gets two requests
     # and a pool of 59,625 tokens (measured on a 64 GB budget, 2026-10-24, its Mamba cache taking much

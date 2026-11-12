@@ -153,13 +153,15 @@ class TheDiskNeedsAreThePreflights(unittest.TestCase):
         overview = sh[sh.index("A plain run installs the box"):sh.index("  --no-start ")]
         # a lane's size is the last number in its parenthesis, before what a ";" adds (the Flash
         # FP4-Local lane's copy of its table, on a cache on another disk)
-        said = {re.sub(r"\s+", "-", name.lower()).replace("flash-fp4-local", "flash-local"):
+        said = {re.sub(r"\s+", "-", name.lower()).replace("flash-fp4-local", "flash-local")
+                .replace("qwen3.8-flash-next-unsloth-gguf", "flash-unsloth"):
                 re.findall(r"\d+", inside.split(";")[0])[-1] for name, inside in
-                re.findall(r"the (image|video|Kolibri|Nemotron Super|Nemotron|Flash\s+FP4-Local|Ornith\s+122B) lane \(([^)]*)\)",
-                           overview)}
-        flags = dict(re.findall(r"--no-(image|video|kolibri|nemotron-super|nemotron|flash-local|ornith-122b)\s+leave the .*?\((?:vLLM, )?(\d+) GB\)", sh))
-        self.assertEqual(set(said), {"image", "video", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b"},
-                         overview)
+                re.findall(r"the (image|video|Kolibri|Nemotron Super|Nemotron|Flash\s+FP4-Local|Ornith\s+122B"
+                           r"|Qwen3\.8\s+Flash-Next\s+Unsloth\s+GGUF) lane \(([^)]*)\)", overview)}
+        flags = dict(re.findall(r"--no-(image|video|kolibri|nemotron-super|nemotron|flash-local|ornith-122b|flash-unsloth)"
+                                r"\s+leave the .*?\((?:vLLM, |llama\.cpp, )?(\d+) GB\)", sh))
+        self.assertEqual(set(said), {"image", "video", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b",
+                                     "flash-unsloth"}, overview)
         self.assertEqual(said, flags)
 
 

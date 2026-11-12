@@ -549,6 +549,65 @@ class FlashLocalBootLog(unittest.TestCase):
         self.assertEqual((b["stage"], b["fired_up"], b["done"], b["detail"]), (None, False, [], ""))
 
 
+class LlamaCppBootLog(unittest.TestCase):
+    """A real boot of llama.cpp's image b12282 (measured before b12316, whose log on the box writes the same
+    lines) serving the Qwen3.8 Flash-Next Unsloth GGUF lane's files with its DFlash2 draft, its log on the reference box
+    (2026-11-12, the study of the lane, run on another port and without the key, which its warning says): the weights
+    for 3 min 33 s with no line, the draft, the slots, "model loaded", then "listening on". Its "E ... failed to
+    initialize the context" line is its own memory fitting, which it says is normal, and reads as nothing here.
+    TODO(measure): the lane's own boot, captured from its unit."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.lines = (HERE.parent / "fixtures" / "flash-unsloth-boot.log").read_text().splitlines()
+
+    def at(self, needle):
+        for i, ln in enumerate(self.lines):
+            if needle in ln:
+                return lc.parse_llamacpp_boot_log(self.lines[:i + 1])
+        self.fail(f"the fixture has no line with {needle!r}")
+
+    def test_a_complete_boot_is_fired_up_with_every_stage_done(self):
+        b = lc.parse_llamacpp_boot_log(self.lines)
+        self.assertTrue(b["fired_up"])
+        self.assertEqual(b["done"], list(lc.LLAMACPP_STAGES))
+        self.assertEqual((b["stage"], b["detail"]), ("warming-up", "ready"))
+
+    def test_each_line_it_writes_opens_its_stage(self):
+        for needle, stage, detail in (
+                ("llama_server: initializing", "init", "starting llama.cpp"),
+                ("load_model: loading model", "loading-weights", "the GGUF's weights, its n-gram table left on the disk"),
+                ("failed to initialize the context", "loading-weights",
+                 "the GGUF's weights, its n-gram table left on the disk"),
+                ("loading draft model", "loading-draft", "the DFlash2 draft"),
+                ("load_model: initializing, n_slots", "allocating-kv", "the KV cache of its window"),
+                ("model loaded", "warming-up", "starting the API")):
+            with self.subTest(line=needle):
+                b = self.at(needle)
+                self.assertEqual((b["stage"], b["detail"]), (stage, detail))
+                self.assertFalse(b["fired_up"])
+                self.assertEqual(b["done"], list(lc.LLAMACPP_STAGES[:lc.LLAMACPP_STAGES.index(stage)]))
+
+    def test_its_stage_never_goes_back(self):
+        start = next(i for i, ln in enumerate(self.lines) if "llama_server: initializing" in ln)
+        order = [lc.LLAMACPP_STAGES.index(lc.parse_llamacpp_boot_log(self.lines[:k])["stage"])
+                 for k in range(start + 1, len(self.lines) + 1)]
+        self.assertEqual(order, sorted(order))
+
+    def test_only_the_latest_boot_counts(self):
+        b = lc.parse_llamacpp_boot_log(self.lines + self.lines[:6])
+        self.assertFalse(b["fired_up"])
+        self.assertEqual((b["stage"], b["done"]), ("loading-weights", ["init"]))
+
+    def test_an_empty_log_is_not_a_boot(self):
+        b = lc.parse_llamacpp_boot_log([])
+        self.assertEqual((b["stage"], b["fired_up"], b["done"], b["detail"]), (None, False, [], ""))
+
+    def test_it_is_an_engine_and_no_sglang_text_unit(self):
+        self.assertIn("qwen38-flash-unsloth.service", lc.ENGINE_UNITS)
+        self.assertNotIn("qwen38-flash-unsloth.service", lc.TEXT_UNITS)
+
+
 class KolibriLane(unittest.TestCase):
     K = "qwen38-kolibri.service"
 

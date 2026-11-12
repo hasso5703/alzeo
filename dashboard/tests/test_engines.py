@@ -130,6 +130,15 @@ class EachVersionIsTheOneInstalled(unittest.TestCase):
                 self.assertIn(assigned("install-nemotron.sh", "NEMOTRON_VLLM_LABEL").replace("-", " "), v)
                 self.assertIn("b12x " + assigned("install-nemotron.sh", "NEMOTRON_B12X_VERSION"), v)
 
+    def test_the_llamacpp_lane(self):
+        # llama.cpp's own server image, pulled by digest: its build number is its version, said beside the pin
+        unit = "qwen38-flash-unsloth.service"
+        self.assertEqual(self.pin(unit), assigned("install-flash-unsloth.sh", "FLASH_UNSLOTH_IMAGE"))
+        self.assertEqual(EN.ENGINES[unit]["engine"], "llama.cpp")
+        self.assertIn(f"server-cuda13: {EN.ENGINES[unit]['version']}, commit ", (REPO / "install-flash-unsloth.sh").read_text())
+        self.assertTrue(EN.runs_pin(unit, [self.pin(unit)]))
+        self.assertFalse(EN.runs_pin(unit, ["ghcr.io/ggml-org/llama.cpp:server-cuda13"]))
+
     def test_the_diffusion_lanes(self):
         for unit, script in (("qwen38-image.service", "install-image.sh"), ("qwen38-video.service", "install-video.sh")):
             with self.subTest(unit=unit):

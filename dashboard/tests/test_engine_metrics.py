@@ -631,6 +631,71 @@ class TheVLLMPage(unittest.TestCase):
         self.assertIsNone(em.parse('prometheus_build_info{v="1"} 1.0\n'))
 
 
+def llamacpp_page(prompt=0, cached=0, prompt_s=0.0, predicted=0, predicted_s=0.0, drafts=0, draft_tokens=0,
+                  accepted=0, processing=0, deferred=0):
+    """A /metrics page as llama-server writes it with --metrics (server-task.cpp's to_metrics, read at b12291): each
+    counter, then each gauge, under its HELP and TYPE lines, with no label, its value in the C++ stream's default form,
+    six significant digits as %g writes them. TODO(measure): a page of the pinned image (b12316), captured on the box,
+    as the vLLM lanes' fixtures are."""
+    counters = (("prompt_tokens_total", prompt), ("prompt_tokens_cached_total", cached), ("prompt_seconds_total", prompt_s),
+                ("tokens_predicted_total", predicted), ("tokens_predicted_seconds_total", predicted_s),
+                ("n_decode_total", predicted), ("n_tokens_max", prompt + cached + predicted),
+                ("spec_decode_num_draft_tokens_total", draft_tokens),
+                ("spec_decode_num_accepted_tokens_total", accepted), ("spec_decode_num_drafts_total", drafts))
+    gauges = (("prompt_tokens_seconds", 0), ("predicted_tokens_seconds", 0), ("requests_processing", processing),
+              ("requests_deferred", deferred), ("n_busy_slots_per_decode", 1))
+    out = []
+    for kind, items in (("counter", counters), ("gauge", gauges)):
+        for name, v in items:
+            out += [f"# HELP llamacpp:{name} what it counts", f"# TYPE llamacpp:{name} {kind}", f"llamacpp:{name} {v:g}"]
+    return "\n".join(out) + "\n"
+
+
+class TheLlamaCppPage(unittest.TestCase):
+    """The Qwen3.8 Flash-Next Unsloth GGUF lane's llama-server (v1.48): fewer counters, read for what they are."""
+    KEY = ("qwen38-flash-unsloth.service", "77")
+
+    def test_its_page_is_read_as_llamacpps(self):
+        p = em.parse(llamacpp_page(prompt=1_000, cached=9_000, prompt_s=2.0, predicted=500, predicted_s=10.0,
+                                   drafts=100, draft_tokens=700, accepted=250))
+        self.assertEqual(p["engine"], "llamacpp")
+        # its prompt tokens are the computed ones, the cached apart: the two make the prompt
+        self.assertEqual((p["prompt"], p["cached"], p["pc"], p["fwd"]), (10_000, 9_000, 1_000, 2.0))
+        self.assertEqual((p["generated"], p["decoded"], p["itl_sum"]), (500, 500, 10.0))
+        self.assertEqual((p["ver"], p["acc"]), (100, 250))
+        self.assertEqual((p["requests"], p["ttft_count"], p["q_count"], p["aborted"]), (0, 0, 0, 0))
+        self.assertFalse(p["idle_seen"])
+
+    def test_the_window_says_what_it_counts_and_what_it_does_not(self):
+        w = em.Window(300)
+        w.add(1000, self.KEY, em.parse(llamacpp_page(prompt=1_000, cached=9_000, prompt_s=2.0, predicted=500,
+                                                     predicted_s=10.0, drafts=100, accepted=250)))
+        w.add(1300, self.KEY, em.parse(llamacpp_page(prompt=5_000, cached=45_000, prompt_s=6.0, predicted=2_500,
+                                                     predicted_s=50.0, drafts=500, accepted=1_250)))
+        s = w.stats(1300)
+        self.assertEqual(s["engine"], "llamacpp")
+        self.assertEqual((s["prompt_tokens"], s["cached_tokens"], s["generated_tokens"]), (40_000, 36_000, 2_000))
+        self.assertAlmostEqual(s["reuse"], 0.9)
+        self.assertAlmostEqual(s["prefill_tps"], 4_000 / 4.0)
+        self.assertAlmostEqual(s["decode_tps"], 2_000 / 40.0)
+        # its draft read with vLLM's formula: one plus the tokens accepted per verification step
+        self.assertAlmostEqual(s["acc_len"], 1 + 1_000 / 400)
+        # what it does not count is said so, not zero: no request, no first token, no queue, no abort, no idle clock
+        self.assertEqual((s["requests"], s["ttft_s"], s["queue_s"], s["aborted"], s["idle_share"]),
+                         (None, None, None, None, None))
+
+    def test_a_count_past_a_million_is_read_in_the_form_it_is_written(self):
+        # six significant digits: past a million the stream writes 1.23457e+06, a few tokens off, still a number
+        text = llamacpp_page(prompt=1_234_567)
+        self.assertIn("llamacpp:prompt_tokens_total 1.23457e+06\n", text)
+        self.assertAlmostEqual(em.parse(text)["pc"], 1_234_567, delta=5)
+
+    def test_its_levels_are_its_requests_at_work_and_waiting(self):
+        g = em.parse_gauges(llamacpp_page(processing=1, deferred=3))
+        self.assertEqual((g["running"], g["queued"]), (1, 3))
+        self.assertIsNone(g["pool"], "it says no fullness of its cache")
+
+
 VL = 'engine="0",model_name="qwen3.8-flash-next-fp4"'
 
 

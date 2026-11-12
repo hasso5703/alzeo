@@ -1,0 +1,94 @@
+[Unit]
+Description=Qwen3.8 Flash-Next Unsloth GGUF (llama.cpp), OpenAI+Anthropic API :__PORT__
+Wants=network-online.target
+Requires=docker.service
+# One engine at a time on this box, said to systemd: starting this lane stops the others
+# and starting another stops this one, the stop finishing before the start in both
+# directions (Conflicts= alone orders nothing, hence After= on the same units).
+Conflicts=qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service
+After=network-online.target docker.service qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+ExecStartPre=-/usr/bin/docker rm -f qwen38-flash-unsloth
+# The memory the last engine held has to be back before this one starts (see engine-preflight.sh).
+ExecStartPre=/bin/bash __HOME__/.config/qwen38/engine-preflight.sh qwen38-flash-unsloth.service
+# What the engine reads has to be there before it runs: llamacpp-files.sh, the head of ExecStart (after the
+# memory guard above) and so the unit's main process, checks the GGUF parts, the draft and the chat template the
+# engine loads (it says why), gives a cache on a disk mounted late at boot 90 s, and exits 78 without them, which
+# leaves the unit failed with the reason on the lane's card. The check itself gone, bash exits 78 too, with its line.
+# Unsloth's GGUF of Qwen3.8-Flash-Next (UD-Q4_K_XL, four parts) served by llama.cpp's own server, from the image
+# its project publishes for arm64 with CUDA 13 (pinned by digest, b12316), with the options measured on the
+# reference box (2026-11-11 and 12, docs/flash-unsloth-lane.md):
+#   --lazy-mode on: the model's n-gram table (its fourth part, 26.8 GiB in IQ4_NL) is read from the disk row by row
+#     as the tokens need it, instead of being held in memory. Without it, on this GPU (an integrated one, which
+#     llama.cpp's auto mode loads without mmap) the table loads with the weights: at 131,072 tokens of context the
+#     guard stopped the load at 5 GiB free; with it the lane leaves 20 GiB available at ready with its two windows.
+#     --load-mode, the installer's LOAD (none, 2026-11-12): the weights copied into the GPU's memory, 27.6 tok/s where
+#     mmap, which has the GPU read them in place in the page cache, decoded at 24.9 side by side (the installer has the
+#     numbers). The files are read where the cache keeps them, with no copy and no preload; from a USB SSD a start
+#     took 261 to 281 s in three starts and 50 to 90 s in two others, and the first answers after a slow one were slower.
+#   -ngl 999 -fa on --no-repack: every layer on the GPU, flash attention, and no repacking of the tensors that
+#     stay on the processor's side (the table): repacking would copy what is read in place.
+#   -c: the windows, the installer's CTX for each request (the context the model was trained for, 262,144 tokens, read
+#     in the GGUF), YaRN's options past it (its YARN), the KV cache's type (its KV), and -np, the requests at once (its
+#     SLOTS, 2), each with a window of its own (its SHARED at 0: -c holds them all, and no request can make another
+#     fail); a third request waits for one of them to end. SHARED at 1 has them share one window (-kvu): a request may
+#     take all of it, idle requests' tokens are let go first when it is full, and requests that still do not fit all
+#     end with "Context size has been exceeded." (llama.cpp's server-context.cpp). --jinja and
+#     --chat-template-file: the chat template the GGUF carries, Unsloth's, with the fixes the other Qwen lanes'
+#     templates have (install-flash-unsloth.sh says which); the model card's sampling (temperature 1.0, top_p
+#     0.95, top_k 20) is in the GGUF, and the server applies it to a request that sets none.
+#   -md and --spec-type, the installer's SPEC: llama.cpp's n-gram lookup (ngram-mod), then the DFlash2 draft of
+#     ggml-org (Q8_0, 0.61 GiB), which proposes up to 7 tokens a step, kept from a probability of 0.5 and checked by rejection
+#     sampling ("probabilistic"). Measured at the card's sampling on one stream (llama.cpp b12291 built on the box):
+#     the DFlash2 draft alone, 56.8 tok/s in code, 54.6 in reasoning, 29.7 in prose, against 24.6, 24.5 and 24.2
+#     without a draft. On the pinned image, the n-gram lookup before it: 51.8 tok/s in code, 56.9 in reasoning, 31.5
+#     in prose and 123.7 in a rewrite of code, each text's first pass (the installer says the numbers).
+#   --alias: the name it serves under (llama-server has no --served-model-name); --metrics: its Prometheus
+#     endpoint, which the cockpit reads with the key; --no-ui: the web interface the server embeds is off, the
+#     cockpit is this box's interface; --api-key-file: the box's key, asked on every route but /health and
+#     /v1/health (read in llama.cpp's server-http.cpp), from the file mounted read-only, so it is in no argv.
+# Of the config directory, the two files the engine reads, read-only, and nothing else: its key and its chat
+# template. --mount, not -v: a source that is not there fails the start, where -v made a directory in its place,
+# owned by root. The Hugging Face cache read-only: the engine reads its GGUF and writes nothing.
+# LLAMA_ARG_HOST and LLAMA_ARG_PORT: the image sets 0.0.0.0 and 8080, which the command line below overrides
+# (llama-server says so in one line at each start); set again here, so that the engine never listens beyond
+# this box's bind even without its --host. --no-healthcheck: the image's own check asks localhost:8080, where
+# this lane does not listen, and docker would call the container unhealthy; the proxy and the cockpit ask
+# /health on the lane's port.
+# --memory 110g: the cap the other lanes run under (FP4-Local's and Ornith's value); the measures of
+# docs/flash-unsloth-lane.md ran without it. TODO(measure): the same speed and readiness under the cap.
+ExecStart=/bin/bash -c 'check=__HOME__/.config/qwen38/llamacpp-files.sh; [ -f "$$check" ] || { echo "preflight: qwen38-flash-unsloth.service lacks its files: $$check is missing (the check of its files). Load the lane from the cockpit, or run ./switch-model.sh flash-unsloth" >&2; exit 78; }; \
+  bash "$$check" qwen38-flash-unsloth.service flash-unsloth __FILES__ || exit $$?; \
+  exec /usr/bin/docker run --rm --name qwen38-flash-unsloth --gpus all \
+  --memory 110g --memory-swap 110g --network host --no-healthcheck \
+  -e LLAMA_ARG_HOST=__ENGINE_BIND__ -e LLAMA_ARG_PORT=__PORT__ \
+  -v __HF_CACHE__:/root/.cache/huggingface:ro \
+  --mount type=bind,source=__HOME__/.config/qwen38/api-key,target=/out/api-key,readonly \
+  --mount type=bind,source=__HOME__/.config/qwen38/chat-template-flash-unsloth.jinja,target=/out/chat-template-flash-unsloth.jinja,readonly \
+  __IMAGE__ \
+    -m __MODEL__ \
+    --alias qwen3.8-flash-next-unsloth \
+    -ngl 999 -fa on --no-repack \
+    --jinja --chat-template-file /out/chat-template-flash-unsloth.jinja \
+    --load-mode __LOAD__ --lazy-mode on \
+    -c __CTX__ __SLOTS__ __KV__ __YARN__ \
+    -md __DRAFT__ \
+    --spec-type __SPEC__ --spec-draft-n-max 7 --spec-draft-p-min 0.5 --spec-draft-sampling probabilistic \
+    --metrics --no-ui --api-key-file /out/api-key \
+    --host __ENGINE_BIND__ --port __PORT__'
+ExecStop=-/usr/bin/docker stop -t 20 qwen38-flash-unsloth
+Restart=always
+# 78: what the engine reads is missing (llamacpp-files.sh, the head of ExecStart above and so its main process,
+# the only one this setting holds for), which no new start brings back; the unit stays failed with the reason
+# in its journal
+RestartPreventExitStatus=78
+# docker stops llama-server with SIGTERM (143) or SIGKILL (137) on a plain stop: a clean stop, not a failure
+SuccessExitStatus=137 143
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

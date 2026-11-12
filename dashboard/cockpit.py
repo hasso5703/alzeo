@@ -180,14 +180,14 @@ MASKED_FIELDS = {"api_key", "admin_api_key"}
 UNITS = ("qwen38-sglang.service", "qwen38-flash.service", "qwen38-image.service",
          "qwen38-video.service", "qwen38-kolibri.service", "qwen38-nemotron.service",
          "qwen38-nemotron-super.service", "qwen38-flash-local.service", "qwen38-ornith-122b.service",
-         "qwen38-keepalive.service")
+         "qwen38-flash-unsloth.service", "qwen38-keepalive.service")
 JOURNAL_UNITS = UNITS + (AGENT_UNIT,)   # what the Logs tab may read (UNITS carries the image, video, Kolibri and Nemotron lanes)
 # The SGLang text engines' containers: what their scheduler lines and their abort contract
 # are read from. The Kolibri and Nemotron lanes' vLLM writes neither, so they are only in
 # CONTAINERS, the list the Logs tab, the diagnostics bundle and the container stats read.
 SGL_CONTAINERS = ("qwen38-sglang", "qwen38-flash")
 CONTAINERS = SGL_CONTAINERS + ("qwen38-kolibri", "qwen38-nemotron", "qwen38-nemotron-super", "qwen38-flash-local",
-                               "qwen38-ornith-122b")
+                               "qwen38-ornith-122b", "qwen38-flash-unsloth")
 
 UNIT2CONT = {"qwen38-sglang.service": "qwen38-sglang",
              "qwen38-flash.service": "qwen38-flash",
@@ -195,7 +195,8 @@ UNIT2CONT = {"qwen38-sglang.service": "qwen38-sglang",
              "qwen38-nemotron.service": "qwen38-nemotron",
              "qwen38-nemotron-super.service": "qwen38-nemotron-super",
              "qwen38-flash-local.service": "qwen38-flash-local",
-             "qwen38-ornith-122b.service": "qwen38-ornith-122b"}
+             "qwen38-ornith-122b.service": "qwen38-ornith-122b",
+             "qwen38-flash-unsloth.service": "qwen38-flash-unsloth"}
 HISTORY_FILE_NAME = "cockpit-history.json"
 
 EVENTS: deque = deque(maxlen=200)
@@ -1028,9 +1029,12 @@ def engine_abort_all(timeout: float = 8.0, why: str = "", floor: bool = True) ->
         # stop that found only those said "no generation ran through the proxy" and no word of them (the 7th review of
         # v1.43.0, 2026-11-04)
         left = f" ({done['finishing']} finished answer(s) left to go out whole)" if done["finishing"] else ""
-        if kolibri_serving() or nemotron_serving():
+        if kolibri_serving() or nemotron_serving() or llamacpp_serving():
             if done["stopped"]:
                 return done
+            if llamacpp_serving():
+                raise RuntimeError(f"no generation ran through the proxy{left}, and {llamacpp_lane_name()}'s llama.cpp has "
+                                   "no route that aborts one sent to it straight (stopping the lane stops them)")
             lane = "the Kolibri-1 lane" if kolibri_serving() else b12x_lane_name()
             raise RuntimeError(f"no generation ran through the proxy{left}, and {lane}'s vLLM has no route that "
                                "aborts one sent to it straight (stopping the lane stops them)")
@@ -1047,6 +1051,9 @@ def engine_abort_all(timeout: float = 8.0, why: str = "", floor: bool = True) ->
                            f"(stopping the lane stops them), and {missed}")
     if nemotron_serving():
         raise RuntimeError(f"{b12x_lane_name()}'s vLLM has no route that aborts its generations "
+                           f"(stopping the lane stops them), and {missed}")
+    if llamacpp_serving():
+        raise RuntimeError(f"{llamacpp_lane_name()}'s llama.cpp has no route that aborts its generations "
                            f"(stopping the lane stops them), and {missed}")
     sglang_abort_all(timeout)
     return {"via": "engine", "stopped": None, "missed": missed}
@@ -1069,6 +1076,191 @@ def floor_said(done: dict) -> str:
     return said + (f" ({done['missed']})" if done.get("missed") else "")
 
 
+# ── The llama.cpp lanes: llama-server on the text port ──────────────────────────────────────
+# The Qwen3.8 Flash-Next Unsloth GGUF lane (v1.48), llama.cpp's own server: none of the routes the SGLang belts read
+# (/v1/loads, /server_info, /flush_cache, /abort_request). Its /health generates nothing and answers 503 while the model
+# loads, 200 after; every other route asks the box's key, /metrics, /props and /v1/models among them (read in its
+# server-http.cpp, b12291), so the cockpit sends it the key it reads the other routes with. Its counters are llamacpp:*,
+# the requests it serves and defers and its draft's among them; no gauge of its KV cache, whose size is its window.
+FLASH_UNSLOTH_UNIT = "qwen38-flash-unsloth.service"
+FLASH_UNSLOTH_UNIT_PATH = Path("/etc/systemd/system/qwen38-flash-unsloth.service")
+# each lane's container, lane, served model and precision, by unit: the family's one table (Unsloth's dynamic GGUF
+# UD-Q4_K_XL, its n-gram table in IQ4_NL)
+LLAMACPP_LANES = {FLASH_UNSLOTH_UNIT: ("qwen38-flash-unsloth", "flash-unsloth", "qwen3.8-flash-next-unsloth", "ud-q4_k_xl")}
+# the lane in a sentence, and the draft model its engine loads (-md)
+LLAMACPP_LANE_NAME = {FLASH_UNSLOTH_UNIT: "the Qwen3.8 Flash-Next Unsloth GGUF lane"}
+LLAMACPP_SPEC = {FLASH_UNSLOTH_UNIT: "DFlash2"}
+
+
+def llamacpp_window(text: str) -> int | None:
+    """The window one request of a llama.cpp unit gets: the -c of its engine, which its requests at once share with -kvu
+    (one request may take it whole), or which holds a window for each of its -np requests without it (lanes.sh's
+    llamacpp_window, the same rule). Read in the unit's lines, its comments left out; None with no -c."""
+    cmd = " ".join(ln for ln in (text or "").splitlines() if not ln.lstrip().startswith("#"))
+    c, np_ = re.search(r" -c (\d+)", cmd), re.search(r" -np (\d+)", cmd)
+    if not c:
+        return None
+    window = int(c.group(1))
+    if np_ and int(np_.group(1)) > 1 and not re.search(r"(?<!\S)-kvu(?!\S)", cmd):
+        window //= int(np_.group(1))
+    return window
+
+
+def llamacpp_spec_algorithm(unit, text: str) -> str | None:
+    """What a llama.cpp lane drafts with, as its unit's --spec-type says it (a comma-separated list of llama.cpp's
+    types, common/speculative.cpp): its n-gram lookup (ngram-*) and the draft model it loads, "n-grams + DFlash2" for
+    the Unsloth GGUF lane's ngram-mod,draft-dflash (2026-11-12); None when it drafts with nothing."""
+    m = re.search(r"--spec-type\s+(\S+)", text or "")
+    types = [x for x in (m.group(1).split(",") if m else []) if x and x != "none"]
+    said = (["n-grams"] if any(x.startswith("ngram-") for x in types) else [])
+    if any(x.startswith("draft-") for x in types):
+        said.append(LLAMACPP_SPEC.get(unit) or "a draft model")
+    return " + ".join(said) or None
+LLAMACPP_READY_ENTER: dict = {}
+_LLAMACPP_SAMPLE = re.compile(r"^(llamacpp:[a-z_]+)(\{[^}]*\})?\s+(\S+)\s*$", re.M)
+# What a llama.cpp lane has no route for, refused here as the page refuses it (base.js, FLASH_UNSLOTH_CANNOT).
+FLASH_UNSLOTH_CANNOT = {
+    "flush_cache": "The Qwen3.8 Flash-Next Unsloth GGUF lane has no cache flush route: llama.cpp keeps and evicts its prompt cache by itself.",
+    "abort_all": "The Qwen3.8 Flash-Next Unsloth GGUF lane has no route that aborts its generations: stopping the lane stops them.",
+    "fit_opencode": "The Qwen3.8 Flash-Next Unsloth GGUF lane's opencode limits are its own, set when it is loaded: its window decides them, not its pool.",
+}
+# the three of each llama.cpp lane, by its unit
+LLAMACPP_CANNOT = {FLASH_UNSLOTH_UNIT: FLASH_UNSLOTH_CANNOT}
+# The text lanes on another engine than SGLang, vLLM's and llama.cpp's: with lc.TEXT_UNITS, every text lane, as the
+# image and video views ask which one holds the GPU (llm_lane). One tuple, named for its family, where two copies of
+# it were written inline (tests/test_lane_lists_whole.py holds it to that family, v1.48).
+OTHER_TEXT_UNITS = (KOLIBRI_UNIT, NEMOTRON_UNIT, NEMOTRON_SUPER_UNIT, FLASH_LOCAL_UNIT, ORNITH_UNIT, FLASH_UNSLOTH_UNIT)
+
+
+def llamacpp_serving_unit() -> str | None:
+    """The llama.cpp lane that holds the text port now (from its boot to its stop), or None."""
+    with LIFE_LOCK:
+        states = LIFE.get("states") or {}
+        return next((u for u in LLAMACPP_LANES if states.get(u) in lc.BUSY_STATES), None)
+
+
+def llamacpp_serving() -> bool:
+    """True while a llama.cpp lane holds the text port."""
+    return llamacpp_serving_unit() is not None
+
+
+def llamacpp_lane_name() -> str:
+    """The llama.cpp lane that serves, in a sentence ("the lane" when none serves any more)."""
+    return LLAMACPP_LANE_NAME.get(llamacpp_serving_unit(), "the lane")
+
+
+def llamacpp_cannot(name: str) -> str | None:
+    """Why an action is refused while a llama.cpp lane serves, in that lane's name, or None."""
+    return LLAMACPP_CANNOT.get(llamacpp_serving_unit(), {}).get(name)
+
+
+def llamacpp_metrics_text(timeout: float) -> str:
+    """llama-server's /metrics page, read with the key it asks there."""
+    req = urllib.request.Request(ENGINE_BASE + "/metrics", headers={"Authorization": f"Bearer {api_key()}"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(2_000_000).decode("utf-8", "replace")
+
+
+def llamacpp_metrics_facts(text: str) -> dict:
+    """What the cockpit reads off llama-server's /metrics: the requests it serves and defers, its draft's verification
+    steps and the draft tokens it accepted, and the tokens it generated (each answer's, counted when it is done)."""
+    out = {"running": 0, "waiting": 0, "spec_accepted": 0.0, "spec_drafts": 0.0, "gen": None}
+    for name, _labels, value in _LLAMACPP_SAMPLE.findall(text or ""):
+        try:
+            v = float(value)
+        except ValueError:
+            continue
+        if v != v or v in (float("inf"), float("-inf")):
+            continue
+        if name == "llamacpp:requests_processing":
+            out["running"] = int(v)
+        elif name == "llamacpp:requests_deferred":
+            out["waiting"] = int(v)
+        elif name == "llamacpp:spec_decode_num_accepted_tokens_total":
+            out["spec_accepted"] = v
+        elif name == "llamacpp:spec_decode_num_drafts_total":
+            out["spec_drafts"] = v
+        elif name == "llamacpp:tokens_predicted_total":
+            out["gen"] = v
+    return out
+
+
+def llamacpp_load(timeout: float = 3.0):
+    """A llama.cpp lane's load in the /get_load shape the rest of the cockpit reads, with its draft's acceptance. No
+    pool and no prompt progress: llama-server publishes neither (no KV cache gauge, no count of the prompts admitted)."""
+    f = llamacpp_metrics_facts(llamacpp_metrics_text(timeout))
+    return [{"dp_rank": 0, "num_reqs": f["running"] + f["waiting"], "num_waiting_reqs": f["waiting"],
+             "num_tokens": 0, "num_used_tokens": 0, "num_pending_tokens": 0,
+             "accept_len": spec_accept_len(f["spec_accepted"], f["spec_drafts"], time.time()),
+             "gen_tokens": f["gen"], "prefix_queries": None, "finished": None, "preemptions": None}]
+
+
+def _llamacpp_log(container: str) -> list[str]:
+    """The lane's container log: a new container at every start, so it is this boot's."""
+    return run(["docker", "logs", "--tail", "300", container], timeout=6, merge_err=True).splitlines()
+
+
+def llamacpp_engine_state(unit: str, *, active: str, sub: str, prev_state: str | None,
+                          enter_key: str) -> tuple:
+    """(state, boot, running) for a llama.cpp lane, from its own facts, as the Kolibri lane's: its container, its /health
+    (open, generating nothing, 503 until the model is loaded), and its boot read in its log while it is not healthy."""
+    container = LLAMACPP_LANES[unit][0]
+    running = bool(run(["docker", "ps", "-q", "-f", f"name=^{container}$"]).strip())
+    healthy = running and kolibri_healthy()          # its /health, on the same port, asks no key
+    UNHEALTHY_TICKS[unit] = 0 if healthy else UNHEALTHY_TICKS.get(unit, 0) + 1
+    served_here = LLAMACPP_READY_ENTER.get(unit) == enter_key and enter_key != "0"
+    boot = {"stage": None, "fired_up": False, "done": []}
+    if running and not healthy:
+        if served_here:
+            boot = {"stage": "warming-up", "fired_up": True, "done": list(lc.LLAMACPP_STAGES)}
+            healthy = UNHEALTHY_TICKS[unit] < 3
+        else:
+            boot = lc.parse_llamacpp_boot_log(_llamacpp_log(container))
+    st = lc.derive_state(unit_active=active, unit_sub=sub, container_running=running,
+                         healthy=healthy, boot=boot)
+    if st["state"] == "degraded" and prev_state not in ("ready", "degraded"):
+        st["state"] = "warming-up"
+    if st["state"] == "ready":
+        LLAMACPP_READY_ENTER[unit] = enter_key
+    return st, boot, running
+
+
+def llamacpp_engine_info(models: list | None = None):
+    """The engine panel's facts for a llama.cpp lane, in the names SGLang's /server_info gives them: what it serves and
+    the window of a request (/v1/models, /props), its version (/props build_info, as engines.py's reports has it), the
+    requests it serves at once (/props total_slots), and from its unit what the engine does not publish: the context it
+    allocates (its -c, its pool), its KV cache's type and its draft. models: /v1/models when the caller has just read it."""
+    if models is None:
+        models = http_json(ENGINE_BASE + "/v1/models", timeout=10).get("data") or [{}]
+    props = http_json(ENGINE_BASE + "/props", timeout=10) or {}
+    served = str(models[0].get("id") or "")
+    unit = next((u for u, lane in LLAMACPP_LANES.items() if lane[2] == served), None)
+    meta = models[0].get("meta") if isinstance(models[0].get("meta"), dict) else {}
+    window = (props.get("default_generation_settings") or {}).get("n_ctx") or meta.get("n_ctx")
+    text = ""
+    if unit == FLASH_UNSLOTH_UNIT:
+        try:
+            text = FLASH_UNSLOTH_UNIT_PATH.read_text(errors="replace")
+        except OSError:
+            text = ""
+    ctx, kv, draft = (re.search(r" -c (\d+)", text), re.search(r" -ctk (\S+)", text),
+                      re.search(r"--spec-draft-n-max (\d+)", text))
+    slim = {"model_path": unit_target(unit).get("model") if unit else None,
+            "served_model_name": served or None,
+            "context_length": window,
+            "max_total_num_tokens": int(ctx.group(1)) if ctx else None,
+            "max_running_requests": props.get("total_slots"),
+            # llama.cpp's own type when the unit names none
+            "kv_cache_dtype": kv.group(1) if kv else ("f16" if text else None),
+            "quantization": LLAMACPP_LANES[unit][3] if unit else None,
+            "speculative_algorithm": llamacpp_spec_algorithm(unit, text) if unit else None,
+            "speculative_num_draft_tokens": int(draft.group(1)) if draft else None,
+            "version": props.get("build_info") or None}
+    return {"node_id": "local", "info": slim,
+            "prompt_ceiling_tokens": proxy_prompt_ceiling(served or None, int(window or 0)),
+            "served_target": LLAMACPP_LANES[unit][1] if unit else None}
+
+
 HEALTH = {"ts": 0.0, "ok": False}
 HEALTH_RECHECK_S = float(os.environ.get("COCKPIT_HEALTH_RECHECK_S", "30"))
 
@@ -1081,7 +1273,7 @@ def collect_engine_fast():
     try:
         # the Kolibri and Nemotron lanes' vLLM answers none of SGLang's load routes (404, twice a second)
         load = (kolibri_load(timeout=3) if kolibri_serving() else nemotron_load(timeout=3) if nemotron_serving()
-                else engine_load(timeout=3))
+                else llamacpp_load(timeout=3) if llamacpp_serving() else engine_load(timeout=3))
     except Exception as e:  # noqa: BLE001
         load = None
         if vllm_answered("load", e):
@@ -1200,6 +1392,8 @@ def collect_engine_info():
         return kolibri_engine_info()
     if nemotron_serving():
         return nemotron_engine_info()
+    if llamacpp_serving():
+        return llamacpp_engine_info()
     # 10 s, not 6: SGLang's event loop stalls under a long prefill and a late answer is
     # far better than none (measured 30/08: three timeouts in a row at 6 s while the same
     # endpoint answered in 0.19 s between two requests).
@@ -1413,6 +1607,10 @@ def collect_canary():
     if not ready and b12x:
         return {"node_id": "local", **CANARY, "skipped": True,
                 "why": f"{B12X_LANE_NAME[b12x]} is checked by vLLM's own /health, not by a generation"}
+    llama = next((u for u in LLAMACPP_LANES if states.get(u) in ("ready", "degraded")), None)
+    if not ready and llama:
+        return {"node_id": "local", **CANARY, "skipped": True,
+                "why": f"{LLAMACPP_LANE_NAME[llama]} is checked by llama.cpp's own /health, not by a generation"}
     why = ("this cockpit is a dry run" if DRY_RUN else "no text engine is ready" if not ready
            else "an action is running" if JOB_LOCK.locked() else "requests are running" if busy
            else "a client was active in the last minute" if recent else "")
@@ -1475,10 +1673,12 @@ METRICS_LOCK = threading.Lock()
 
 def engine_metrics_read(timeout: float = 4.0):
     """One read of the serving engine's counters and the levels it showed with them, or
-    None: no engine, no answer in time, or a page of neither engine's. Unauthenticated:
-    SGLang exempts /metrics from the API key, and so does the vLLM lanes' middleware."""
+    None: no engine, no answer in time, or a page of no engine's. With the key: llama.cpp asks
+    it on /metrics (v1.48), and SGLang and the vLLM lanes' middleware, which exempt /metrics
+    from it, read past it."""
     try:
-        with urllib.request.urlopen(ENGINE_BASE + "/metrics", timeout=timeout) as r:
+        req = urllib.request.Request(ENGINE_BASE + "/metrics", headers={"Authorization": f"Bearer {api_key()}"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             text = r.read(4_000_000).decode("utf-8", "replace")
         counters = em.parse(text)
         return None if counters is None else (counters, em.parse_gauges(text))
@@ -1560,7 +1760,7 @@ def collect_engine_metrics():
     """5 s tier: the serving engine's counters over the last 5 minutes."""
     # the vLLM lanes' too: engine_metrics.py reads their names, and a key taken among the SGLang
     # lanes alone never asked them for a page (found in review, 2026-10-20)
-    key = serving_text_key(lc.TEXT_UNITS + VLLM_UNITS)
+    key = serving_text_key(lc.TEXT_UNITS + VLLM_UNITS + tuple(LLAMACPP_LANES))
     if key is None:
         return {"node_id": "local", "lane": None}
     started = time.time()
@@ -1899,7 +2099,8 @@ def collect_opencode():
         out[key]["default"] = cfg.get("model")
         if key == "real":
             for prov, pv in (cfg.get("provider") or {}).items():
-                if prov not in ("qwen38", "flashnext", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b"):
+                if prov not in ("qwen38", "flashnext", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b",
+                                "flash-unsloth"):
                     continue
                 for mid, mv in (pv.get("models") or {}).items():
                     lim = mv.get("limit") or {}
@@ -1920,7 +2121,8 @@ def collect_opencode():
     if pool and served:
         prov = {"qwen3.8-27b": "qwen38", "qwen3.8-flash-next": "flashnext", "kolibri-1": "kolibri",
                 "nemotron-3.5-bolt": "nemotron", "nemotron-3.5-super-vl": "nemotron-super",
-                "qwen3.8-flash-next-fp4": "flash-local", "ornith-1.5-122b": "ornith-122b"}.get(served)
+                "qwen3.8-flash-next-fp4": "flash-local", "ornith-1.5-122b": "ornith-122b",
+                "qwen3.8-flash-next-unsloth": "flash-unsloth"}.get(served)
         lim = (out["real"]["limits"] or {}).get(f"{prov}/{served}") if prov else None
         if lim and lim.get("context"):
             ctx, outp = int(lim["context"]), int(lim.get("output") or 0)
@@ -2362,6 +2564,16 @@ def unit_target(unit: str) -> dict:
         m = re.search(r"(\S+) --revision [0-9a-f]{40}", text)
         model = m.group(1) if m else None
         return {"model": model, "target": NEMOTRON_LANES[unit][1] if model else None}
+    if unit in LLAMACPP_LANES:
+        # one checkpoint, named in its unit by the path of its first GGUF part in the cache's snapshot (llama-server
+        # takes files, not a repository and a revision): the repository its folder names
+        try:
+            text = FLASH_UNSLOTH_UNIT_PATH.read_text(errors="replace")
+        except OSError:
+            return {"model": None, "target": None}
+        m = re.search(r"\s-m\s+/root/\.cache/huggingface/hub/models--([^/\s]+)/snapshots/[0-9a-f]{40}/", text)
+        model = m.group(1).replace("--", "/") if m else None
+        return {"model": model, "target": LLAMACPP_LANES[unit][1] if model else None}
     if unit == "qwen38-video.service":
         # one checkpoint, one target, same rule as the image lane
         model = _video_unit_flag("--model-path", "MiniMaxAI/MiniMax-H3") \
@@ -2545,14 +2757,17 @@ def collect_lifecycle():
         is_video = unit == lc.VIDEO_UNIT
         is_kolibri = unit == lc.KOLIBRI_UNIT
         is_nemotron = unit in NEMOTRON_LANES      # the vLLM lanes on b12x: Nemotron's two, FP4-Local, Ornith
+        is_llamacpp = unit in LLAMACPP_LANES      # llama.cpp's: the Unsloth GGUF lane
         if (is_image or is_video) and not (IMAGE_UNIT_PATH.exists() if is_image else VIDEO_UNIT_PATH.exists()):
             continue                    # not installed: no card, no pill, no gate
         if is_kolibri and not KOLIBRI_UNIT_PATH.exists():
             continue
         if is_nemotron and not nemotron_unit_path(unit).exists():
             continue
+        if is_llamacpp and not FLASH_UNSLOTH_UNIT_PATH.exists():
+            continue
         # the lanes the cockpit follows on their own facts, not the SGLang text belts
-        own_facts = is_image or is_video or is_kolibri or is_nemotron
+        own_facts = is_image or is_video or is_kolibri or is_nemotron or is_llamacpp
         # The checkpoint the unit names, read once per unit and per poll; and the one this
         # activation booted, kept from its start: a switch during a boot rewrites the unit,
         # whose file then names the NEXT start's checkpoint, and the boot landed in that
@@ -2583,6 +2798,10 @@ def collect_lifecycle():
                 enter_key=d.get("ActiveEnterTimestampMonotonic", "0"))
         elif is_nemotron:
             st, boot, running = nemotron_engine_state(
+                unit, active=active, sub=d.get("SubState", "?"), prev_state=prev.get(unit),
+                enter_key=d.get("ActiveEnterTimestampMonotonic", "0"))
+        elif is_llamacpp:
+            st, boot, running = llamacpp_engine_state(
                 unit, active=active, sub=d.get("SubState", "?"), prev_state=prev.get(unit),
                 enter_key=d.get("ActiveEnterTimestampMonotonic", "0"))
         else:
@@ -3009,6 +3228,7 @@ def lane_prepared(lane: str):
     unit = {"image": IMAGE_UNIT_PATH, "video": VIDEO_UNIT_PATH, "kolibri": KOLIBRI_UNIT_PATH,
             "nemotron": NEMOTRON_UNIT_PATH, "nemotron-super": NEMOTRON_SUPER_UNIT_PATH,
             "flash-local": FLASH_LOCAL_UNIT_PATH, "ornith-122b": ORNITH_UNIT_PATH,
+            "flash-unsloth": FLASH_UNSLOTH_UNIT_PATH,
             "flash": UNIT_PATHS["qwen38-flash.service"], "27b": UNIT_PATHS["qwen38-sglang.service"]}[lane]
     try:
         text = unit.read_text(errors="replace")
@@ -3028,8 +3248,9 @@ def lane_prepared(lane: str):
             return Path(waits.group(1)).stat().st_size > 0     # [ -s ]: an empty one is skipped
         except OSError:
             return False
-    if lane in ("flash-local", "ornith-122b"):
-        # its image is pulled as published, by digest: the one digest its unit names (the two lanes' one)
+    if lane in ("flash-local", "ornith-122b", "flash-unsloth"):
+        # its image is pulled as published, by digest: the one digest its unit names (FP4-Local's and Ornith's one,
+        # llama.cpp's for the Unsloth GGUF lane)
         m = re.search(r"\S+@sha256:[0-9a-f]{64}", text)
         return bool(m) and run(["docker", "image", "inspect", "--format", "{{.Id}}", m.group(0)],
                                timeout=10).strip().startswith("sha256:")
@@ -3050,12 +3271,14 @@ def lane_prepared(lane: str):
 def collect_lanes_ready():
     """30 s tier: which side lanes are prepared, for the Load journey (it builds a lane's
     runtime first when it is not)."""
-    return {lane: lane_prepared(lane) for lane in ("image", "video", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b", "flash", "27b")}
+    return {lane: lane_prepared(lane) for lane in ("image", "video", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b",
+                                                   "flash-unsloth", "flash", "27b")}
 
 
 UNIT_OF_LANE = {"image": "qwen38-image.service", "video": "qwen38-video.service", "kolibri": KOLIBRI_UNIT,
                 "nemotron": NEMOTRON_UNIT, "nemotron-super": NEMOTRON_SUPER_UNIT, "flash-local": FLASH_LOCAL_UNIT,
-                "ornith-122b": ORNITH_UNIT, "flash": "qwen38-flash.service", "27b": "qwen38-sglang.service"}
+                "ornith-122b": ORNITH_UNIT, "flash-unsloth": FLASH_UNSLOTH_UNIT, "flash": "qwen38-flash.service",
+                "27b": "qwen38-sglang.service"}
 
 
 def served_snapshot(text: str, model: str, allow=None, rev: str | None = None):
@@ -3102,14 +3325,16 @@ def lane_startable(lane: str):
     unit = UNIT_OF_LANE[lane]
     path = {"image": IMAGE_UNIT_PATH, "video": VIDEO_UNIT_PATH, "kolibri": KOLIBRI_UNIT_PATH,
             "nemotron": NEMOTRON_UNIT_PATH, "nemotron-super": NEMOTRON_SUPER_UNIT_PATH,
-            "flash-local": FLASH_LOCAL_UNIT_PATH, "ornith-122b": ORNITH_UNIT_PATH}.get(lane) or UNIT_PATHS[unit]
+            "flash-local": FLASH_LOCAL_UNIT_PATH, "ornith-122b": ORNITH_UNIT_PATH,
+            "flash-unsloth": FLASH_UNSLOTH_UNIT_PATH}.get(lane) or UNIT_PATHS[unit]
     try:
         text = path.read_text(errors="replace")
     except OSError:
         return None
     # a path in quotes, as a unit edited by hand may write it, read without them; the mount
     # read-only too (:ro), as the engines have it since 2026-10-18
-    tmpl = re.search(r"--chat-template\s+[\"']?/out/([^\s\"']+)", text)
+    # (--chat-template-file on a llama.cpp lane)
+    tmpl = re.search(r"--chat-template(?:-file)?\s+[\"']?/out/([^\s\"']+)", text)
     out = re.search(r"-v\s+[\"']?([^ :\"']+)[\"']?:/out(?=[:\"'\s]|$)", text, re.M)
     # or the template mounted on its own, as the Qwen3.8 Flash-Next FP4-Local lane mounts it (--mount): read by the
     # directory's mount only, its check was passed by (found in review, 2026-10-20)
@@ -3121,6 +3346,21 @@ def lane_startable(lane: str):
                 return False
         except OSError:
             return False
+    # A llama.cpp lane's unit names its files by their paths in the cache (llama-server takes files, not a repository
+    # and a revision), and its start checks them before its engine (llamacpp-files.sh, the head of its ExecStart): the
+    # same files by the same rule here, a file there and not empty, and the check itself, without which every start of
+    # the unit is refused.
+    llama = re.search(r"check=(/\S+/llamacpp-files\.sh);.*?bash \"\$\$check\" \S+ \S+ (.+?) \|\| exit", text, re.S)
+    if llama:
+        if not Path(llama.group(1)).is_file():
+            return False
+        for f in llama.group(2).split():
+            try:
+                if Path(f).stat().st_size == 0:
+                    return False
+            except OSError:
+                return False
+        return True
     model = unit_target(unit).get("model")
     if not model or model.startswith(("/", ".")):
         return True
@@ -3175,7 +3415,8 @@ def lane_startable(lane: str):
 @guard
 def collect_lanes_startable():
     """30 s tier: which side lanes can start as installed (their Start), lane_startable."""
-    return {lane: lane_startable(lane) for lane in ("image", "video", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b", "flash", "27b")}
+    return {lane: lane_startable(lane) for lane in ("image", "video", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b",
+                                                    "flash-unsloth", "flash", "27b")}
 
 
 def engine_table() -> dict:
@@ -3200,9 +3441,10 @@ def engine_table() -> dict:
         except OSError:
             row["pinned"] = None
             continue
-        # the window the unit starts its engine with (FLASH_LOCAL_CONTEXT=1m, discussion #63), where the unit says it
+        # the window the unit starts its engine with (FLASH_LOCAL_CONTEXT=1m, discussion #63), where the unit says it;
+        # a llama.cpp lane's, one request's: its -c, shared with -kvu, or split between its requests without it
         m = re.search(r"--(?:max-model-len|context-length) (\d+)", text)
-        row["window"] = int(m.group(1)) if m else None
+        row["window"] = int(m.group(1)) if m else llamacpp_window(text)
         try:
             row["pinned"] = en.runs_pin(unit, ei.inputs(str(path), str(CONFIG_DIR), hf, [], text=text)[1])
         except Exception:  # noqa: BLE001
@@ -3337,7 +3579,8 @@ AUDIT_LOG = CONFIG_DIR / "cockpit-audit.log"
 SERVING_UNITS = {"qwen38-sglang.service", "qwen38-flash.service",
                  "qwen38-keepalive.service", "qwen38-image.service",
                  "qwen38-video.service", "qwen38-kolibri.service", "qwen38-nemotron.service",
-                 "qwen38-nemotron-super.service", "qwen38-flash-local.service", "qwen38-ornith-122b.service", AGENT_UNIT}
+                 "qwen38-nemotron-super.service", "qwen38-flash-local.service", "qwen38-ornith-122b.service",
+                 "qwen38-flash-unsloth.service", AGENT_UNIT}
 UNIT_VERBS = {"start", "stop", "restart"}
 
 def _lane_unit_texts() -> list[str]:
@@ -3346,7 +3589,7 @@ def _lane_unit_texts() -> list[str]:
     texts = []
     for path in (UNIT_PATHS["qwen38-sglang.service"], UNIT_PATHS["qwen38-flash.service"],
                  KOLIBRI_UNIT_PATH, NEMOTRON_UNIT_PATH, NEMOTRON_SUPER_UNIT_PATH, FLASH_LOCAL_UNIT_PATH,
-                 ORNITH_UNIT_PATH, IMAGE_UNIT_PATH, VIDEO_UNIT_PATH):
+                 ORNITH_UNIT_PATH, FLASH_UNSLOTH_UNIT_PATH, IMAGE_UNIT_PATH, VIDEO_UNIT_PATH):
         try:
             texts.append(path.read_text(errors="replace"))
         except OSError:
@@ -3368,7 +3611,8 @@ ACTIONS = {
         "danger": "medium",
         "params": {"target": ["stock", "uncensored", "fp8", "uncensored-fp8",
                               "flash", "flash-nvda", "flash-uncensored", "flash-local", "image", "image-turbo",
-                              "video", "kolibri", "kolibri-nvfp4", "nemotron", "nemotron-super", "ornith-122b"]},
+                              "video", "kolibri", "kolibri-nvfp4", "nemotron", "nemotron-super", "ornith-122b",
+                              "flash-unsloth"]},
         "argv": lambda p: ["bash", str(REPO_DIR / "switch-model.sh"), p["target"]],
         # A switch can download a whole checkpoint: 124 GB for flash take about 23 min at
         # the 89 MB/s the reference box gets, so 30 min failed it on any slower link, and
@@ -3467,6 +3711,8 @@ def target_lane(target: str) -> str:
         return "flash-local"
     if target == "ornith-122b":
         return "ornith-122b"
+    if target == "flash-unsloth":
+        return "flash-unsloth"
     if target.startswith("flash"):
         return "flash"
     return "27b"
@@ -3491,12 +3737,14 @@ TARGET_PIN = {"stock": "STOCK_REV", "uncensored": "UNC_REV", "fp8": "FP8_REV", "
               "image": "IMAGE_MODEL_PIN_REV", "image-turbo": "IMAGE_TURBO_PIN_REV",
               "video": "VIDEO_MODEL_PIN_REV", "kolibri": "KOLIBRI_FP8_REV", "kolibri-nvfp4": "KOLIBRI_NVFP4_REV",
               "nemotron": "NEMOTRON_BOLT_REV", "nemotron-super": "NEMOTRON_SUPER_REV",
-              "flash-local": "FLASH_LOCAL_REV", "ornith-122b": "ORNITH_122B_REV"}
+              "flash-local": "FLASH_LOCAL_REV", "ornith-122b": "ORNITH_122B_REV", "flash-unsloth": "FLASH_UNSLOTH_REV"}
 # The Nemotron lanes load a drafter with the checkpoint, and their Download (the switch's --fetch)
 # fetches both: Library's state of such a target counts its drafter too. Bolt's read whole with its
 # drafter missing, which its Load then fetched (found on the reference box, 2026-10-15). The 27B's
 # DFlash2 draft belongs to its lane's preparation instead (lane_prepared), not to a target.
-TARGET_DRAFT_PIN = {"nemotron": "NEMOTRON_BOLT_DRAFT_REV", "nemotron-super": "NEMOTRON_SUPER_DRAFT_REV"}
+TARGET_DRAFT_PIN = {"nemotron": "NEMOTRON_BOLT_DRAFT_REV", "nemotron-super": "NEMOTRON_SUPER_DRAFT_REV",
+                    # the Unsloth GGUF lane's DFlash2 draft, which its Download fetches with its parts
+                    "flash-unsloth": "FLASH_UNSLOTH_DRAFT_REV"}
 
 
 def target_unit(target: str) -> Path:
@@ -3515,6 +3763,8 @@ def target_unit(target: str) -> Path:
         return FLASH_LOCAL_UNIT_PATH
     if target == "ornith-122b":
         return ORNITH_UNIT_PATH
+    if target == "flash-unsloth":
+        return FLASH_UNSLOTH_UNIT_PATH
     if target.startswith("flash"):
         return UNIT_PATHS["qwen38-flash.service"]
     return UNIT_PATHS["qwen38-sglang.service"]
@@ -3796,6 +4046,11 @@ def systemone_available(max_age: float = 60.0) -> dict:
         # the same refusal (v6.43), before the family's rule below gives it the Nemotron lanes' reason
         return {"available": False, "lane": "", "status": None,
                 "reason": f"the Ornith 1.5 122B lane is serving: System One is answered by {who}, "
+                          f"on SGLang, so load {one}"}
+    if text is None and states.get(FLASH_UNSLOTH_UNIT) in lc.BUSY_STATES:
+        # the proxy refuses it on llama.cpp (v6.55), as on vLLM
+        return {"available": False, "lane": "", "status": None,
+                "reason": f"the Qwen3.8 Flash-Next Unsloth GGUF lane is serving: System One is answered by {who}, "
                           f"on SGLang, so load {one}"}
     b12x = next((u for u in NEMOTRON_LANES if states.get(u) in lc.BUSY_STATES), None)
     if text is None and b12x:
@@ -4105,7 +4360,7 @@ def image_status() -> dict:
     # and saying so beats guessing "stopped" at a lane that may be serving
     out["state"] = states.get(IMAGE_UNIT) or "unknown"
     out["available"] = out["state"] in ("ready", "degraded")
-    out["llm_lane"] = next((u for u in lc.TEXT_UNITS + (KOLIBRI_UNIT, NEMOTRON_UNIT, NEMOTRON_SUPER_UNIT, FLASH_LOCAL_UNIT, ORNITH_UNIT) if states.get(u) in lc.BUSY_STATES), "")
+    out["llm_lane"] = next((u for u in lc.TEXT_UNITS + OTHER_TEXT_UNITS if states.get(u) in lc.BUSY_STATES), "")
     if out["available"]:
         out["progress"] = image_progress(serving=True)
     return out
@@ -4670,7 +4925,7 @@ def video_status() -> dict:
     # yet, and saying so beats guessing "stopped" at a lane that may be serving
     out["state"] = states.get(VIDEO_UNIT) or "unknown"
     out["available"] = out["state"] in ("ready", "degraded")
-    out["llm_lane"] = next((u for u in lc.TEXT_UNITS + (KOLIBRI_UNIT, NEMOTRON_UNIT, NEMOTRON_SUPER_UNIT, FLASH_LOCAL_UNIT, ORNITH_UNIT) if states.get(u) in lc.BUSY_STATES), "")
+    out["llm_lane"] = next((u for u in lc.TEXT_UNITS + OTHER_TEXT_UNITS if states.get(u) in lc.BUSY_STATES), "")
     if out["available"]:
         out["progress"] = dict(VIDEO_LAST) if VIDEO_LAST.get("status") not in ("completed", "failed", "") else {}
         out["run"] = video_run_now()
@@ -5306,6 +5561,9 @@ def video_content(vid: str) -> tuple[int, bytes, str]:
 
 
 def job_flush_cache(job: Job):
+    if llamacpp_serving():
+        return False, [f"{llamacpp_lane_name()}'s llama.cpp has no cache flush route (nothing was flushed); "
+                       "llama.cpp keeps and evicts its prompt cache by itself"], {"ok": False, "reason": "unsupported"}
     if kolibri_serving():
         return False, ["the Kolibri-1 lane's vLLM has no cache flush route (nothing was flushed); "
                        "vLLM evicts its prefix cache by itself"], {"ok": False, "reason": "unsupported"}
@@ -5378,6 +5636,7 @@ def job_diag_bundle(job: Job):
         (tdp / "journal-nemotron-super.txt").write_text(run(["journalctl", "-u", NEMOTRON_SUPER_UNIT, "-n", "300", "--no-pager", "-o", "short-iso"], timeout=15))
         (tdp / "journal-flash-local.txt").write_text(run(["journalctl", "-u", FLASH_LOCAL_UNIT, "-n", "300", "--no-pager", "-o", "short-iso"], timeout=15))
         (tdp / "journal-ornith-122b.txt").write_text(run(["journalctl", "-u", ORNITH_UNIT, "-n", "300", "--no-pager", "-o", "short-iso"], timeout=15))
+        (tdp / "journal-flash-unsloth.txt").write_text(run(["journalctl", "-u", FLASH_UNSLOTH_UNIT, "-n", "300", "--no-pager", "-o", "short-iso"], timeout=15))
         (tdp / "journal-opencode-web.txt").write_text(run(["journalctl", "-u", AGENT_UNIT, "-n", "200", "--no-pager", "-o", "short-iso"], timeout=15))
         for cont in CONTAINERS:
             (tdp / f"docker-{cont}.txt").write_text(run(["docker", "logs", "--tail", "600", cont], timeout=15, merge_err=True))
@@ -5388,7 +5647,7 @@ def job_diag_bundle(job: Job):
             # the Kolibri and Nemotron lanes' facts are their own: SGLang's route was a 404 there (review, 2026-10-14)
             try:
                 info = (kolibri_engine_info() if kolibri_serving() else nemotron_engine_info() if nemotron_serving()
-                        else engine_server_info(timeout=6))
+                        else llamacpp_engine_info() if llamacpp_serving() else engine_server_info(timeout=6))
             except Exception as e:  # noqa: BLE001
                 if not vllm_answered("info", e):
                     raise
@@ -5570,7 +5829,7 @@ def start_action(name: str, params: dict, origin: str = "ui") -> tuple[int, dict
     if name in KOLIBRI_CANNOT and kolibri_serving():
         audit({"kind": "action_blocked", "action": name, "params": clean, "reasons": [KOLIBRI_CANNOT[name]]})
         return 409, {"error": "blocked", "reasons": [KOLIBRI_CANNOT[name]]}
-    why_not = b12x_cannot(name)
+    why_not = b12x_cannot(name) or llamacpp_cannot(name)
     if why_not:
         audit({"kind": "action_blocked", "action": name, "params": clean, "reasons": [why_not]})
         return 409, {"error": "blocked", "reasons": [why_not]}

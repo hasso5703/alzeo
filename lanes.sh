@@ -392,6 +392,18 @@ unit_hf_cache(){  # $1... units or launchers; one slash at a time, as a unit ren
   { grep -hoE -- '-v [^ :]+:/root/\.cache/huggingface' "$@" 2>/dev/null || true; } \
     | head -1 | sed -e 's/^-v //' -e 's|:/root/\.cache/huggingface$||' | tr -s /
 }
+# The window one request of a llama.cpp unit gets (v1.48): the -c of its engine, which its requests at once share with
+# -kvu (one request may take it whole), or which holds a window for each of its -np requests without it. Read in the
+# unit's lines, its comments left out. Nothing when it names no -c.
+llamacpp_window(){  # $1 a unit file
+  local cmd c np
+  cmd="$({ grep -v '^[[:space:]]*#' "$1" 2>/dev/null || true; } | tr '\n' ' ')"
+  c="$(printf '%s\n' "$cmd" | { grep -oE -- ' -c [0-9]+' || true; } | awk 'NR == 1 {print $2}')"
+  [ -n "$c" ] || return 0
+  np="$(printf '%s\n' "$cmd" | { grep -oE -- ' -np [0-9]+' || true; } | awk 'NR == 1 {print $2}')"
+  case " $cmd " in *" -kvu "*) ;; *) [ -z "$np" ] || [ "$np" -le 1 ] || c=$((c / np)) ;; esac
+  printf '%s\n' "$c"
+}
 existing(){  # $1 a path
   local p="$1"; while [ ! -e "$p" ]; do p="$(dirname "$p")"; done; printf '%s\n' "$p"
 }

@@ -24,7 +24,8 @@ PATH_LINE = 'PATH="$(printf \'%s\' "$PATH" | tr -s /)"; export PATH'
 # the entry points that render a unit, the sudoers or a config from the home, or compare one with it
 ENTRY = ("install.sh", "switch-model.sh", "prepare-lane.sh", "uninstall.sh", "get.sh", "install-image.sh",
          "install-video.sh", "install-kolibri.sh", "install-nemotron.sh", "install-nemotron-super.sh",
-         "install-flash-local.sh", "install-ornith-122b.sh", "install-speech.sh", "dashboard/install-dashboard.sh",
+         "install-flash-local.sh", "install-ornith-122b.sh", "install-flash-unsloth.sh", "install-speech.sh",
+         "dashboard/install-dashboard.sh",
          "dashboard/install-agent.sh")
 
 
@@ -70,7 +71,7 @@ class OneSpellingOfTheHome(unittest.TestCase):
             sudoers = out.read_text()
         self.assertNotIn(f"{home}//", sudoers)
         # the cockpit's switch, under systemd, with the same home spelled without the slash
-        for lane in ("sglang", "image", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b"):
+        for lane in ("sglang", "image", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b", "flash-unsloth"):
             with self.subTest(lane=lane):
                 call = (f"/usr/bin/install -m 644 {home}/.config/qwen38/qwen38-{lane}.service.switch-stage "
                         f"/etc/systemd/system/qwen38-{lane}.service")

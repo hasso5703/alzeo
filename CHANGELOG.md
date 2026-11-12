@@ -1,5 +1,70 @@
 # Changelog
 
+## v1.48.0 (2026-11-12): a tenth lane, the first on llama.cpp: Qwen3.8 Flash-Next in Unsloth's GGUF, with n-grams and a DFlash2 draft
+
+**The lane.** `install-flash-unsloth.sh` serves Unsloth's dynamic 4-bit GGUF of Qwen3.8-Flash-Next
+(`unsloth/Qwen3.8-Flash-Next-GGUF`, UD-Q4_K_XL: 76.9 GiB of weights) with llama.cpp's own server, from the image the
+llama.cpp project publishes for arm64 with CUDA (`server-cuda13`, b12316, pinned by digest: nothing is built on the box).
+Tokens are proposed by llama.cpp's n-gram lookup, then by ggml-org's GGUF of the DFlash2 draft (Q8_0), up to 7 a step,
+kept from a probability of 0.5 and checked by rejection sampling. It serves on the text port behind the proxy and the
+box's key as `qwen3.8-flash-next-unsloth`, OpenAI and Anthropic dialects alike, text only, to two requests at once,
+each with a window of its own of the 262,144 tokens the model was trained for. Its n-gram table (26.8 GiB) stays on the
+disk, read row by row as the tokens need it (`--lazy-mode on`): without it the GB10, an integrated GPU, loads the table
+with the weights, and the box's memory guard stopped the load at 5 GiB free. Its weights are copied into the GPU's
+memory (`--load-mode none`): read in place in the page cache (`mmap`), the same files decoded at 27.9 tok/s in the
+evening and about 25 at night, and side by side `none` gave 27.6 where `mmap` gave 24.9. With its two windows the lane
+holds 97,552 MiB of the GPU's at ready and leaves 20 GiB to the box, 14 after the probes of two and four requests at
+once. Where its files sit (the USB SSD or the internal disk) made no difference to the decode, and it reads them where
+the cache keeps them, with no copy and no preload; from the USB SSD three starts of five took 261 to 281 s, their first
+answers slower, against 35 to 50 s from the internal disk. Measured one request at a time at the model card's sampling
+on the pinned image, its files on the USB SSD (2026-11-12, each text's first pass): 51.8 tok/s in code, 56.9 in
+reasoning, 31.5 in prose and 123.7 in a rewrite of code. On b12282's image, measured first, the lookup slowed the draft
+down (46.9, 43.9, 22.9 and 116.2, against 53.8, 58.8, 31.3 and 52.0 with the draft alone and 27.9, 27.7, 27.3 and 27.4
+with no draft), hence b12316. Two requests at once gave 63.2 tok/s in all, 34.2 each, against 54.2 for one (b12291 built
+on the box): each has a window of its own, so that neither can make the other fail, and a third waits its turn. One
+window shared by four gave 72.9 tok/s in all and is an option (`FLASH_UNSLOTH_SHARED=1`), with its risk: llama-server
+lets go of idle requests' tokens first when the window is full, and requests in progress that still do not fit all end
+with "Context size has been exceeded.". Four windows with the KV cache in q8_0 left 10 GiB to the box after the probes:
+not taken. The whole window is read: three codes of three found in a prompt of 255,529 tokens. A window of 524,288
+tokens with YaRN is an option, a few lines of the installer for one request at a time (three codes of three at 500,000
+tokens), not the default until its effect on short texts is measured; the KV cache in FP8 is refused for this model,
+and the installer takes f16 or q8_0 (q8_0 read the window whole too, its prompt computed 2.4 % slower, with 4 GiB more
+left to the box, and no evaluation of the answers ran in it). These are measures of minutes run back to back, during
+which the box's hottest zone peaked at 88 to 95.5 °C: no continuous load was measured. TODO(measure): several requests
+at once with the table on the USB SSD, a window of 1,048,576 tokens, GSM8K and HumanEval, the eight clients, the prefix
+cache through the proxy, the memory at a long prompt's peak, the same under the unit's `--memory 110g`. Every number and
+the settings measured: `docs/flash-unsloth-lane.md`.
+
+**Its files, pinned one by one.** The repository holds every quantization of the model: the lane takes the four parts
+of one folder and the draft, each by its sha256 and its size (`PATH=SHA256:SIZE`, read from the Hub's LFS pointers and
+the reference box's cache), and fetches them with `gguf-fetch.py`, Python's standard library on the host, since the
+image has no Python: into the cache's own layout, so a file `huggingface_hub` fetched is not fetched again, resumed,
+checked against its sha256 before it takes its name, refused before the first byte without the room, under
+`huggingface_hub`'s own lock of the blob, the token sent to the Hub alone. The unit checks the files it names before the
+engine starts (`llamacpp-files.sh`, exit 78 with the reason on the lane's card), and `check-pins.sh` asks every file's
+LFS pointer and the image, on the GitHub Container Registry with its own anonymous token, every day.
+
+**Its chat template.** The GGUF carries Qwen's template with Unsloth's changes, which still refused a system message
+past the opening ones (opencode and Claude Code send them) and raised on a Claude Code ToolSearch result, and defaulted
+to `xhigh`. `patch-template.py --gguf` reads it from the GGUF's header and gives it the other Qwen lanes' fixes, `lean`
+its default.
+
+**Everything that knows a lane knows it.** `install.sh` puts its unit in on every plain install, on demand like the
+other lanes (`--with-flash-unsloth`, `--no-flash-unsloth`, `--all-weights`: about 1047 GB of disk for the whole box,
+878 of downloads), and `switch-model.sh flash-unsloth` fetches its files through its installer and stages its unit;
+`prepare-lane.sh`, `uninstall.sh`, the one-engine `Conflicts=` of every unit, the proxy's hold of a starting text lane,
+opencode's and pi's providers (`oc-flash-unsloth.py`, four levels, `lean` first), the 64 GB rule (it does not fit) and
+the cockpit's rack, Library, engine panel, logs and diagnostics all name it. The cockpit follows it on its own facts:
+its `/health`, its boot read in its container's log, its requests and its draft's acceptance off `/metrics` (which, like
+`/props` and `/v1/models`, asks the key: the cockpit sends it), its version off `/props`; it refuses Flush and Abort in
+its name (llama.cpp has neither route; closing the connection stops a generation, which the proxy does, as on vLLM), and
+System One points at the SGLang lanes, as the proxy does. Its mark is Unsloth's.
+
+**Proxy v6.55.** llama.cpp's engine is told by its `owned_by` (`llamacpp`): a client that leaves closes the upstream, the
+window is read from `/v1/models` (`meta.n_ctx`), System One is refused there with the lanes that answer it, and the
+flash model's one-prompt ceiling applies to its name as to the two other flash lanes'. The pair reads a llama.cpp unit's
+name, checkpoint and slots from its command (`--alias`, the snapshot of its `-m`, `-np`), as it reads a vLLM unit's.
+
 ## v1.47.0 (2026-11-12): a GPU clock cap in the cockpit's Machine view: about the same tokens per second for fewer watts and degrees
 
 **What it is.** The Machine view has a new setting, the GPU clock cap: None, the factory setting and the default, or a

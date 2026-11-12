@@ -8,6 +8,11 @@ holds what the script does; this holds who runs it, with which options, that eac
 Xet ban the script lifts for one repo only, and that each caller mounting it in a container
 makes sure it is there first (docker -v of a missing file makes a root-owned directory in its
 place).
+
+One exception, the llama.cpp lanes' (v1.48): their GGUF files go through gguf-fetch.py, with Python's standard
+library on the host, since llama.cpp's server image has no Python and a GGUF repository holds every quantization of
+its model, of which a lane takes a few files, each pinned by its sha256. It is held to the same rule: one call, in
+llamacpp-lane.sh, which the lane's installer runs (--fetch, which switch-model.sh runs in turn), and no other.
 """
 import pathlib
 import re
@@ -54,7 +59,9 @@ CALLS = {
 }
 SCRIPTS = ("install.sh", "switch-model.sh", "install-image.sh", "install-video.sh", "install-kolibri.sh",
            "install-nemotron.sh", "install-nemotron-super.sh", "install-flash-local.sh", "install-ornith-122b.sh",
-           "vllm-lane.sh")
+           "vllm-lane.sh", "install-flash-unsloth.sh", "llamacpp-lane.sh")
+# the llama.cpp lanes' one fetch of their GGUF files (the docstring says why it is not ckpt-fetch.py)
+GGUF_CALL = ("llamacpp-lane.sh", 'python3 -I "$HERE/gguf-fetch.py" "$HF_CACHE" "$@"')
 VLLM_INSTALLERS = ("install-kolibri.sh", "install-nemotron.sh", "install-nemotron-super.sh", "install-flash-local.sh",
                    "install-ornith-122b.sh")
 
@@ -99,6 +106,19 @@ class EveryLaneFetchesThroughIt(unittest.TestCase):
                 self.assertIn(check, t)
                 self.assertIn(mount, t)
                 self.assertLess(t.index(check), t.index(mount), "checked before it is mounted")
+
+    def test_the_gguf_files_have_their_one_fetch_too(self):
+        script, call = GGUF_CALL
+        self.assertEqual(text(script).count(call), 1, f"{script} no longer runs it this way")
+        others = [s for s in (*SCRIPTS, *(p.name for p in REPO.glob("*.sh")))
+                  if s != script and "gguf-fetch.py\" \"$" in text(s)]
+        self.assertEqual(others, [], "a second caller of gguf-fetch.py")
+        # its installer fetches through it alone, and switch-model.sh through its installer
+        self.assertIn('\n  llane_fetch "$MODEL" "$MODEL_REV"', text("install-flash-unsloth.sh"))
+        self.assertIn('bash "$REPO_DIR/install-flash-unsloth.sh" --fetch', text("switch-model.sh"))
+        # and its token is never on a command line: read from the environment by the script
+        self.assertNotIn("HF_TOKEN", call)
+        self.assertIn('os.environ.get("HF_TOKEN"', text("gguf-fetch.py"))
 
     def test_each_vllm_installer_names_the_script_in_its_preflight_before_it_fetches(self):
         # the three vLLM installers check ckpt-fetch.py in their preflight (vllm-lane.sh's

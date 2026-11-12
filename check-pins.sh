@@ -71,6 +71,10 @@ eval "$fline"
 # The Ornith lane's: its authors' checkpoint (its image is the Qwen3.8 Flash-Next FP4-Local lane's, checked below).
 oline="$(grep -E '^ORNITH_122B_(REPO|REV)=' "$REPO_DIR/install-ornith-122b.sh")"
 eval "$oline"
+# The Qwen3.8 Flash-Next Unsloth GGUF lane's: Unsloth's GGUF at its revision, each of the four parts the lane
+# serves by its sha256 (PATH=SHA256:SIZE), the draft the same way in ggml-org's repository, and llama.cpp's image.
+uline="$(grep -E '^FLASH_UNSLOTH_(REPO|REV|PART[1-4]|DRAFT_REPO|DRAFT_REV|DRAFT|IMAGE)=' "$REPO_DIR/install-flash-unsloth.sh")"
+eval "$uline"
 # The speech lane's: llama.cpp's commit, each recognizer's two GGUF at its revision with the
 # sha256 the install checks, and Kokoro's two files, which nothing checked either (found in the
 # audit of 2026-10-16). Each recognizer size is a branch of install-speech.sh's case on
@@ -166,11 +170,17 @@ else:
 check_image() {  # $1 label, $2 image reference (name@sha256:... or name:tag): it exists, and runs on linux/arm64
   case "$1" in *"$FILTER"*) ;; *) return 0 ;; esac
   CHECKED=$((CHECKED + 1))
-  local repo ref token answer code what
+  local repo ref token answer code what registry=registry-1.docker.io auth
   repo="${2%%@*}"; repo="${repo%%:*}"
   case "$2" in *@*) ref="${2#*@}" ;; *) ref="${2##*:}" ;; esac
-  token="$(curl -s -m 25 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repo}:pull" \
-    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  auth="https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repo}:pull"
+  # llama.cpp's images are on the GitHub Container Registry, whose anonymous token for a public image
+  # comes from its own endpoint
+  case "$repo" in
+    ghcr.io/*) registry=ghcr.io; repo="${repo#ghcr.io/}"
+               auth="https://ghcr.io/token?service=ghcr.io&scope=repository:${repo}:pull" ;;
+  esac
+  token="$(curl -s -m 25 "$auth" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
   if [ -z "$token" ]; then
     # not asked is not resolved: an offline run must not end in "all resolve"
     printf '  \033[0;31mFAIL\033[0m  %-14s %s (no registry token, so not checked: offline?)\n' "$1" "$2"
@@ -182,7 +192,7 @@ check_image() {  # $1 label, $2 image reference (name@sha256:... or name:tag): i
     -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
     -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
     -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
-    "https://registry-1.docker.io/v2/${repo}/manifests/${ref}")"
+    "https://${registry}/v2/${repo}/manifests/${ref}")"
   code="${answer##*$'\n'}"
   if [ "$code" != 200 ]; then
     if no_answer "$code"; then
@@ -201,7 +211,7 @@ check_image() {  # $1 label, $2 image reference (name@sha256:... or name:tag): i
   case "$what" in
     "config "*)
       answer="$(curl -s -L -m 25 -w '\n%{http_code}' -H "Authorization: Bearer $token" \
-        "https://registry-1.docker.io/v2/${repo}/blobs/${what#config }")"
+        "https://${registry}/v2/${repo}/blobs/${what#config }")"
       code="${answer##*$'\n'}"
       if [ "$code" != 200 ]; then
         if no_answer "$code"; then
@@ -418,6 +428,15 @@ echo "Qwen3.8 Flash-Next FP4-Local lane"
 check_model  flash-local    "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_REV"
 echo "Ornith 1.5 122B lane"
 check_model  ornith-122b    "$ORNITH_122B_REPO" "$ORNITH_122B_REV"
+echo "Qwen3.8 Flash-Next Unsloth GGUF lane"
+# each part and the draft by its LFS pointer at the revision: the sha256 the fetch checks every byte against
+n=0
+for part in "$FLASH_UNSLOTH_PART1" "$FLASH_UNSLOTH_PART2" "$FLASH_UNSLOTH_PART3" "$FLASH_UNSLOTH_PART4"; do
+  n=$((n + 1)); sha="${part##*=}"; sha="${sha%%:*}"
+  check_model "unsloth-part$n" "$FLASH_UNSLOTH_REPO" "$FLASH_UNSLOTH_REV" "${part%=*}" "$sha"
+done
+sha="${FLASH_UNSLOTH_DRAFT##*=}"; sha="${sha%%:*}"
+check_model  unsloth-draft  "$FLASH_UNSLOTH_DRAFT_REPO" "$FLASH_UNSLOTH_DRAFT_REV" "${FLASH_UNSLOTH_DRAFT%=*}" "$sha"
 echo "Speech lane"
 check_commit speech-llama-cpp ggml-org/llama.cpp "$LLAMA_CPP_PIN"
 for size in $ASR_SIZES; do
@@ -438,6 +457,7 @@ check_image flash-base     "$FLASH_IMAGE"
 check_image kolibri-base   "$KOLIBRI_BASE_IMAGE"
 check_image nemotron-base  "$NEMOTRON_BASE_IMAGE"
 check_image flash-local    "$FLASH_LOCAL_IMAGE"
+check_image flash-unsloth  "$FLASH_UNSLOTH_IMAGE"
 
 echo
 if [ "$FAIL" -eq 0 ]; then

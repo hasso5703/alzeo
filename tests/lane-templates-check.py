@@ -52,6 +52,13 @@ VLLM_LANES = {
     "nemotron": ("install-nemotron.sh", "NEMOTRON_BOLT", None),
     "nemotron-super": ("install-nemotron-super.sh", "NEMOTRON_SUPER", None),
 }
+# How each llama.cpp target's installer serves its template: the one its GGUF carries in its first part
+# (tokenizer.chat_template), patched by patch-template.py --gguf with the installer's TEMPLATE_FIXES and handed to
+# llama-server with --chat-template-file (install-flash-unsloth.sh, v1.48). (installer, pin prefix, the variable that
+# pins the first part as PATH=SHA256:SIZE, the fixes.)
+GGUF_LANES = {
+    "flash-unsloth": ("install-flash-unsloth.sh", "FLASH_UNSLOTH", "FLASH_UNSLOTH_PART1", {"LEAN_DEFAULT": "1"}),
+}
 # switch-model.sh's targets that serve no chat template
 NOT_TEXT = {"image", "image-turbo", "video"}
 
@@ -78,6 +85,9 @@ def fixes_of(installer_text, name="the installer"):
         if "patch-template.py" in line and not line.startswith("vlane_preflight "):
             raise SystemExit(f"{name} runs patch-template.py itself: give it a TEMPLATE_FIXES line, run through vlane_template")
     calls = [c.group(1) for c in (re.search(r"\bvlane_template(?:_if_cached)? (\S.*?)(?:; *\}|$)", line) for line in code) if c]
+    # a llama.cpp lane's llane_template takes its GGUF's first part between the file and the fixes (llamacpp-lane.sh)
+    calls += [re.sub(r'^("\$TEMPLATE") "[^"]*" ', r"\1 ", c.group(1))
+              for c in (re.search(r"\bllane_template (\S.*?)(?:; *\}|$)", line) for line in code) if c]
     if sum(bool(re.match(r"TEMPLATE_FIXES\+?=", line)) for line in code) > 1:
         raise SystemExit(f"{name} sets TEMPLATE_FIXES more than once: this check reads one line")
     m = re.search(r"^TEMPLATE_FIXES=\(([^)]*)\)$", installer_text, re.M)
@@ -117,14 +127,23 @@ def lane_specs(repo_dir=REPO):
             raise SystemExit(f"{script} runs patch-template.py otherwise than with its five fixes: {calls}")
     specs = [(t, *pin(install, p), {}) for t, p in targets]
     installers = sorted(f.name for f in repo_dir.glob("install-*.sh") if "vlane_put_unit" in f.read_text())
-    known = sorted({f for f, _, _ in VLLM_LANES.values()})
+    known = sorted({f for f, _, _ in VLLM_LANES.values()} | {f for f, _, _, _ in GGUF_LANES.values()})
     if installers != known:
-        raise SystemExit(f"the vLLM lanes are {installers}, this check knows {known}: add the new lane to VLLM_LANES")
+        raise SystemExit(f"the vLLM and llama.cpp lanes are {installers}, this check knows {known}: add the new lane to "
+                         "VLLM_LANES or GGUF_LANES")
     for name, (installer, prefix, env) in VLLM_LANES.items():
         text = (repo_dir / installer).read_text()
         if fixes_of(text, installer) != env:
             raise SystemExit(f"{installer} serves its template otherwise than VLLM_LANES says for {name}")
         specs.append((name, *pin(text, prefix), env))
+    for name, (installer, prefix, part_var, env) in GGUF_LANES.items():
+        text = (repo_dir / installer).read_text()
+        if fixes_of(text, installer) != env:
+            raise SystemExit(f"{installer} serves its template otherwise than GGUF_LANES says for {name}")
+        part = re.search(rf'^{part_var}="([^"=]+)=[0-9a-f]{{64}}:\d+"', text, re.M)
+        if not part:
+            raise SystemExit(f"{installer} no longer pins {part_var} the way this check reads it")
+        specs.append((name, *pin(text, prefix), {**env, "gguf": part.group(1)}))
     switch = re.search(r'^case "\$CHOICE" in ([a-z0-9|-]+)\) ;;', (repo_dir / "switch-model.sh").read_text(), re.M)
     if not switch:
         raise SystemExit("switch-model.sh no longer lists its targets the way this check reads them")
@@ -238,6 +257,41 @@ def served(repo, rev, fetched, spec):
         # the installer patches chat_template.jinja alone and hands that file to the engine with
         # --chat-template, which serves it to every request: a named template of the repo goes unused
         # (second review, 2026-10-24)
+        return out.read_text()
+
+
+def served_gguf(repo, rev, spec, tries=5, sleep=time.sleep):
+    """A llama.cpp lane's template as its installer serves it: its GGUF's first part fetched (11 MB for the Unsloth GGUF
+    lane's), its header read and patched by patch-template.py --gguf, as llane_template does."""
+    spec = dict(spec)
+    part = spec.pop("gguf")
+    patches = spec.pop("patches", None)
+    url = f"https://huggingface.co/{repo}/resolve/{rev}/{part}"
+    with tempfile.TemporaryDirectory(prefix="lane-gguf-") as d:
+        local = Path(d, "part.gguf")
+        for attempt in range(tries):
+            try:
+                with urllib.request.urlopen(url, timeout=120) as r, open(local, "wb") as f:
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                break
+            except urllib.error.HTTPError as e:
+                if e.code not in RETRY or attempt == tries - 1:
+                    raise
+                asked = server_wait(e.headers)
+                sleep(2 ** (attempt + 1) if asked is None else asked)
+            except (OSError, http.client.HTTPException):
+                if attempt == tries - 1:
+                    raise
+                sleep(2 ** (attempt + 1))
+        out = Path(d, "served.jinja")
+        argv = [sys.executable, str(REPO / "patch-template.py")] + ([f"--patches={patches}"] if patches else [])
+        r = subprocess.run(argv + [f"--gguf={local}", str(out)], capture_output=True, text=True, env={**os.environ, **spec})
+        if r.returncode != 0:
+            raise SystemExit(f"patch-template.py refused {repo}@{rev[:12]} {part}:\n{r.stdout}{r.stderr}")
         return out.read_text()
 
 
@@ -428,6 +482,10 @@ def engine_reads(name, template, env):
     """(the engine, True when it takes "openai" content) for this target's template."""
     if name in VLLM_LANES:
         return "vllm", vllm_takes_parts(template, env, macros=name not in VLLM_WITHOUT_MACROS)
+    if name in GGUF_LANES:
+        # llama.cpp parses the client's messages and hands its own JSON of them to its jinja engine: rendered here as
+        # the client sends them, strings and lists of parts both (the loop below), which its conversion keeps or joins
+        return "llamacpp", True
     return "sglang", sglang_takes_parts(template, env)
 
 
@@ -483,14 +541,17 @@ def main():
                 raise SystemExit("the renderer did not see the canary's refusal: this check would pass on anything")
     failed = renders = 0
     for name, repo, rev, patch in lane_specs():
-        template = served(repo, rev, fetch(repo, rev), patch)
+        template = (served_gguf(repo, rev, patch) if patch and "gguf" in patch
+                    else served(repo, rev, fetch(repo, rev), patch))
         how = "as published" if patch is None else f"patched ({patch.get('patches', 'all five fixes')})"
         reads = {tools is not None: engine_reads(name, pick(template, tools), env) for tools in (None, TOOLS)}
         engine = reads[False][0]
-        said = {("vllm", True): "lists of parts", ("sglang", True): "what the client sends"}
+        said = {("vllm", True): "lists of parts", ("sglang", True): "what the client sends",
+                ("llamacpp", True): "what the client sends"}
         takes = " and ".join(sorted({said.get(r, "strings") for r in reads.values()}))
         print(f"{name}: {repo}@{rev[:12]}, {how}, {engine}, which hands it {takes}")
-        hands_of = vllm_hands if engine == "vllm" else sglang_hands
+        hands_of = (vllm_hands if engine == "vllm" else (lambda m, _openai: m) if engine == "llamacpp"
+                    else sglang_hands)
         for shape in shapes:
             for tools in (None, TOOLS):
                 openai = reads[tools is not None][1]

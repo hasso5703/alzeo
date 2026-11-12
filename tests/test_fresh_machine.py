@@ -647,7 +647,7 @@ class TheScriptsRunFromATerminalGoOnWithTheGroup(unittest.TestCase):
     def test_each_asks_before_its_first_docker_command(self):
         for f in ("switch-model.sh", "install-image.sh", "install-video.sh", "install-kolibri.sh",
                   "install-nemotron.sh", "install-nemotron-super.sh", "install-flash-local.sh",
-                  "install-ornith-122b.sh", "uninstall.sh", "install.sh"):
+                  "install-ornith-122b.sh", "install-flash-unsloth.sh", "uninstall.sh", "install.sh"):
             with self.subTest(f):
                 text = (REPO / f).read_text()
                 at = text.index('docker_session bash "$')
@@ -659,7 +659,8 @@ class TheScriptsRunFromATerminalGoOnWithTheGroup(unittest.TestCase):
     def test_each_has_the_die_the_library_calls(self):
         for f in ("switch-model.sh", "install-image.sh", "install-video.sh", "install-kolibri.sh",
                   "install-nemotron.sh", "install-nemotron-super.sh", "install-flash-local.sh",
-                  "install-ornith-122b.sh", "uninstall.sh", "install.sh", "prepare-lane.sh", "install-speech.sh"):
+                  "install-ornith-122b.sh", "install-flash-unsloth.sh", "uninstall.sh", "install.sh", "prepare-lane.sh",
+                  "install-speech.sh"):
             with self.subTest(f):
                 text = (REPO / f).read_text()
                 self.assertRegex(text[:text.index('lanes.sh"')], r"\ndie ?\(\) *\{")
@@ -763,7 +764,7 @@ class TheWholeScripts(unittest.TestCase):
         self.assertIn(wall.WALL, out, out[-800:])
         self.assertIn("This box is a 64 GB DGX Spark: the lanes that fit it are the Qwen3.8 27B and Nemotron 3.5 Bolt here", out)
         self.assertIn("Left out, as they need a 128 GB one: image (Qwen-Image 2.1), video (MiniMax-H3), Qwen3.8 Flash-Next, Kolibri-1, "
-                      "Nemotron 3.5 Super VL, Qwen3.8 Flash-Next FP4-Local, Ornith 1.5 122B.", out)
+                      "Nemotron 3.5 Super VL, Qwen3.8 Flash-Next FP4-Local, Ornith 1.5 122B, Qwen3.8 Flash-Next Unsloth GGUF.", out)
         self.assertIn("Context mode: native (262144 tokens), the one a 64 GB DGX Spark holds.", out)
         self.assertNotIn("needs a ~121 GB", out)
 

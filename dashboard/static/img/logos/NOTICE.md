@@ -8,9 +8,12 @@ from 1.102.0 (`icons/qwen-color.svg`, Qwen's new mark, its three shapes in blue;
 cockpit showed the former purple star of 1.95.1 until v1.44.1), `minimax.svg` from 1.95.1. `alephalpha.svg` is the same set's Aleph Alpha icon (`icons/alephalpha.svg`, which
 the set ships in one colour only), with the same three attributes removed. `nvidia.svg` is
 the same set's colour NVIDIA icon (`icons/nvidia-color.svg`), the same three attributes
-removed. The marks themselves belong to their owners (Qwen to Alibaba Cloud, MiniMax to
-MiniMax, Aleph Alpha to Aleph Alpha, NVIDIA to NVIDIA); the cockpit shows them only to say
-which model a lane runs.
+removed. `unsloth.svg` is the same set's colour Unsloth icon (`icons/unsloth-color.svg` of
+1.102.0, sha256 068c4d17e21e2008a8660637177c061f6dddf36c1bac590d46617f01e48b0ef3 as published), the
+same three attributes removed: the Qwen3.8 Flash-Next Unsloth GGUF lane serves Unsloth's GGUF
+quantization of Qwen's model. The marks themselves belong to their owners (Qwen to Alibaba Cloud,
+MiniMax to MiniMax, Aleph Alpha to Aleph Alpha, NVIDIA to NVIDIA, Unsloth to Unsloth AI); the
+cockpit shows them only to say which model a lane runs.
 
 `ornith.svg` is Ornith AI's round avatar, cropped from the logo its authors publish in their
 model's repository (`assets/ornith_logo.png` of https://github.com/ornith-ai/Ornith-1 at commit

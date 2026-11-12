@@ -44,14 +44,17 @@ class Box:
         (repo / "install.sh").write_text((REPO / "install.sh").read_text())
         text = SWITCH
         for unit in ("qwen38-sglang.service", "qwen38-flash.service", "qwen38-nemotron.service",
-                     "qwen38-nemotron-super.service", "qwen38-flash-local.service", "qwen38-ornith-122b.service"):
+                     "qwen38-nemotron-super.service", "qwen38-flash-local.service", "qwen38-ornith-122b.service",
+                     "qwen38-flash-unsloth.service"):
             old = f'"/etc/systemd/system/{unit}"'
             assert old in text, f"switch-model.sh no longer names {unit} that way"
             text = text.replace(old, f'"{units}/{unit}"')
         (repo / "switch-model.sh").write_text(text)
         # install-flash-local.sh --room runs before its fetch, with what it sources and its table's tool
+        # and the Unsloth GGUF lane's installer, whose --fetch the switch runs, with what it sources and its fetcher
         for f in ("lanes.sh", "ckpt-fetch.py", "install-nemotron.sh", "install-nemotron-super.sh", "install-flash-local.sh",
-                  "install-ornith-122b.sh", "vllm-lane.sh", "ple-table.py"):
+                  "install-ornith-122b.sh", "vllm-lane.sh", "ple-table.py", "install-flash-unsloth.sh", "llamacpp-lane.sh",
+                  "gguf-fetch.py"):
             (repo / f).write_text((REPO / f).read_text())
         # the Nemotron lane's unit, as install-nemotron.sh writes it: its image, its cache, the
         # checkpoint and the memory share on lines of their own
@@ -100,6 +103,17 @@ class Box:
             f"  {self.flocal_pins['FLASH_LOCAL_IMAGE']} \\\n"
             f"  vllm serve {self.ornith_pins['ORNITH_122B_REPO']} --revision {self.ornith_pins['ORNITH_122B_REV']} \\\n"
             "    --gpu-memory-utilization 0.8 --port 30000'\n")
+        # the Unsloth GGUF lane's unit: llama.cpp's image by digest, its cache read-only, its GGUF by its snapshot
+        upins = dict(line.split("=", 1) for line in (REPO / "install-flash-unsloth.sh").read_text().splitlines()
+                     if line.startswith("FLASH_UNSLOTH_") and "=" in line)
+        self.unsloth_pins = {k: v.strip('"') for k, v in upins.items()}
+        self.unsloth_unit = units / "qwen38-flash-unsloth.service"
+        self.unsloth_unit.write_text(
+            "[Service]\nExecStart=/bin/bash -c 'exec /usr/bin/docker run --rm --name qwen38-flash-unsloth \\\n"
+            f"  -v {self.home}/.cache/huggingface:/root/.cache/huggingface:ro \\\n"
+            f"  {self.unsloth_pins['FLASH_UNSLOTH_IMAGE']} \\\n"
+            "    -m /root/.cache/huggingface/hub/models--unsloth--Qwen3.8-Flash-Next-GGUF/snapshots/"
+            f"{self.unsloth_pins['FLASH_UNSLOTH_REV']}/x.gguf -c 262144 --port 30000'\n")
         (repo / "switch-model.sh").chmod(0o755)
         self.bin = self.t / "bin"
         self.bin.mkdir()
@@ -110,15 +124,20 @@ class Box:
         # answered here, and a 29 GB disk got the 45 GB refusal (found in a cloud review,
         # 2026-10-18); the room check has its own tests, in tests/test_switch_room.py
         (self.bin / "df").write_text("#!/bin/sh\necho Avail; echo 500G\n")
-        for n in ("docker", "systemctl", "sudo", "df"):
+        # the GGUF fetcher answers as if its files were whole, and says how it was run; any other Python is the real one
+        (self.bin / "python3").write_text('#!/bin/sh\nfor a in "$@"; do case "$a" in */gguf-fetch.py) '
+                                          'printf "%s\\n" "$*" >> "$GGUF_LOG"; exit 0 ;; esac; done\n'
+                                          'exec /usr/bin/python3 "$@"\n')
+        for n in ("docker", "systemctl", "sudo", "df", "python3"):
             (self.bin / n).chmod(0o755)
+        self.gguf_log = self.t / "gguf.log"
         self.docker_log = self.t / "docker.log"
         self.sysctl_log = self.t / "systemctl.log"
         self.script = repo / "switch-model.sh"
 
     def run(self, *args):
         e = {"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.home),
-             "DOCKER_LOG": str(self.docker_log), "SYSTEMCTL_LOG": str(self.sysctl_log)}
+             "DOCKER_LOG": str(self.docker_log), "SYSTEMCTL_LOG": str(self.sysctl_log), "GGUF_LOG": str(self.gguf_log)}
         r = subprocess.run([str(self.script), *args], capture_output=True, text=True, env=e, timeout=60)
         runs = self.docker_log.read_text().splitlines() if self.docker_log.exists() else []
         calls = self.sysctl_log.read_text().splitlines() if self.sysctl_log.exists() else []
@@ -198,6 +217,28 @@ class FetchOnly(unittest.TestCase):
         self.assertIn(f" {box.flocal_pins['FLASH_LOCAL_IMAGE']} ", runs[0], "in the Qwen3.8 Flash-Next FP4-Local lane's image, by digest")
         self.assertEqual(box.ornith_unit.read_bytes(), unit_before)
         self.assertFalse([c for c in calls if re.search(r"\b(enable|disable|daemon-reload|restart|start|stop)\b", c)], calls)
+
+    def test_the_unsloth_lane_fetches_through_its_installer_and_stops(self):
+        # its GGUF files on the host, by gguf-fetch.py (the image has no Python): the model's four parts, then the draft,
+        # into the cache its unit mounts; no container, no unit rewritten (v1.48)
+        box = Box()
+        unit_before = box.unsloth_unit.read_bytes()
+        rc, out, runs, calls = box.run("flash-unsloth", "--fetch")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("is in the cache; nothing else was changed", out)
+        pins = box.unsloth_pins
+        fetches = box.gguf_log.read_text().splitlines()
+        self.assertEqual(len(fetches), 2, fetches)
+        hf = f"{box.home}/.cache/huggingface"
+        parts = " ".join(pins[f"FLASH_UNSLOTH_PART{i}"] for i in range(1, 5))
+        self.assertTrue(fetches[0].endswith(f"gguf-fetch.py {hf} {pins['FLASH_UNSLOTH_REPO']} {pins['FLASH_UNSLOTH_REV']} {parts}"),
+                        fetches[0])
+        self.assertTrue(fetches[1].endswith(f"gguf-fetch.py {hf} {pins['FLASH_UNSLOTH_DRAFT_REPO']} "
+                                            f"{pins['FLASH_UNSLOTH_DRAFT_REV']} {pins['FLASH_UNSLOTH_DRAFT']}"), fetches[1])
+        self.assertEqual(runs, [], "no container")
+        self.assertEqual(box.unsloth_unit.read_bytes(), unit_before)
+        self.assertFalse([c for c in calls if re.search(r"\b(enable|disable|daemon-reload|restart|start|stop)\b", c)], calls)
+        self.assertFalse((box.home / ".config/qwen38/text-lane").exists(), "--fetch wrote the text-lane record")
 
     def test_without_it_the_switch_goes_on_past_the_download(self):
         rc, out, runs, _ = Box().run("stock")

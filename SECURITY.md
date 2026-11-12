@@ -267,7 +267,13 @@ discussion, not a disclosure.
   readable by anything that can reach the proxy port. That is the port's
   existing trust model (a trusted network by design, see the plain HTTP edge
   above); the metrics endpoint adds counters to it, not a new surface to
-  authenticate against. The image and video lanes export no metrics.
+  authenticate against. The image and video lanes export no metrics. The
+  Qwen3.8 Flash-Next Unsloth GGUF lane (v1.48) is the exception: llama.cpp's
+  server asks the box's key on every route but `/health` and `/v1/health`
+  (its `server-http.cpp`), `/metrics`, `/props` and `/slots` included, so its
+  counters are read with the key, by the cockpit as by anyone through the
+  proxy. It reads the key from the file mounted read-only (`--api-key-file`),
+  in no command line, and its web interface is off (`--no-ui`).
 - **The speech lane's routes take no key.** Like the image and video lanes, the speech
   lane (opt-in, `:30024`) serves its routes with no key on loopback, and neither the
   cockpit nor the proxy relays them: programs on the box reach them, another machine

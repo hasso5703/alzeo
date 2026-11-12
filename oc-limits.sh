@@ -296,6 +296,15 @@ case "$CHOICE" in
     #     990,000 - 20,000 + 43,863 + 32,000 = 1,045,863  <=  1,048,576
     CTX=990000; OUT=32000; LABEL="local, 1M"
     ;;
+  flash-unsloth)
+    # The Qwen3.8 Flash-Next Unsloth GGUF lane serves the model's own window, 262,144 tokens, to each of its two
+    # requests at once (the -c of its unit holds both windows, -np 2, the context the GGUF says it was trained for),
+    # and llama.cpp refuses a prompt past its slot's context. So the window decides one request's pair, by the flash
+    # lane's rule and numbers (the same model, the same tokenizer, the proxy's same ceiling), and with a window each no
+    # request can make another fail (docs/flash-unsloth-lane.md):
+    #     205,000 - 20,000 + 43,863 + 32,000 = 260,863  <=  262,144
+    CTX=205000; OUT=32000; LABEL="local, 262K"
+    ;;
   *) printf 'oc-limits: unknown target "%s"\n' "$CHOICE" >&2; exit 2 ;;
 esac
 
