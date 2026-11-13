@@ -255,6 +255,41 @@ class CompleteForWhatTheLaneServes(unittest.TestCase):
         self.assertTrue(rg.snapshot_complete(s))
         self.assertEqual(rg.snapshot_complete(s), cf.complete(s))
 
+    def test_a_gguf_split_in_parts_is_complete_only_with_every_part_whole(self):
+        # the Unsloth GGUF lane's checkpoint (v1.48.0): no index, its parts linked as each blob is whole; a fetch cut
+        # short between two parts left a model llama.cpp refuses to load, and the Library said it was there. Built
+        # here in a temporary folder, so that every runner covers it (GitHub's CI measured registry.py under its
+        # floor where only the box's own cache had taken these lines, 2026-11-13)
+        d = Path(tempfile.mkdtemp(prefix="reg-gguf-"))
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        (d / "blobs").mkdir()
+        s = d / "snapshots" / ("c" * 40)
+        (s / "UD-Q4_K_XL").mkdir(parents=True)
+        (s / "UD-IQ3_XXS").mkdir()
+        q4 = [s / "UD-Q4_K_XL" / f"m-UD-Q4_K_XL-0000{i}-of-00004.gguf" for i in range(1, 5)]
+        for i, p in enumerate(q4):
+            p.symlink_to(d / "blobs" / f"q4-{i}")
+        self.assertFalse(rg.snapshot_complete(s), "no blob yet")
+        for i in (0, 1, 3):
+            (d / "blobs" / f"q4-{i}").write_text("w")
+        self.assertFalse(rg.snapshot_complete(s), "the third part's blob is missing")
+        (d / "blobs" / "q4-2").write_text("w")
+        self.assertTrue(rg.snapshot_complete(s))
+        # a quantization the lane does not serve, begun: it counts only where the patterns cover it
+        (s / "UD-IQ3_XXS" / "m-UD-IQ3_XXS-00001-of-00004.gguf").write_text("w")
+        self.assertFalse(rg.snapshot_complete(s))
+        self.assertTrue(rg.snapshot_complete(s, ["UD-Q4_K_XL/"]))
+        self.assertFalse(rg.snapshot_complete(s, ["UD-IQ3_XXS/"]))
+        # a part removed, a file in one piece, and nothing at all
+        q4[1].unlink()
+        self.assertFalse(rg.snapshot_complete(s, ["UD-Q4_K_XL/"]))
+        one = d / "snapshots" / ("e" * 40)
+        one.mkdir()
+        self.assertFalse(rg.snapshot_complete(one))
+        (one / "draft.gguf").write_text("w")
+        self.assertTrue(rg.snapshot_complete(one))
+        self.assertFalse(rg.gguf_complete(one, ["other/"]))
+
     def test_the_video_lane_patterns_are_the_switchs_own(self):
         sw = (REPO / "switch-model.sh").read_text()
         self.assertEqual(rg.video_allow(sw, "fl2va")[0], "FL2VA/*")
