@@ -52,7 +52,7 @@ class Engine(http.server.BaseHTTPRequestHandler):
     """llama-server as the proxy meets it: its models, props and metrics, its two count routes, and generations."""
     protocol_version = "HTTP/1.1"
     window, slots = 262144, 2
-    generated, counted = [], []
+    generated, counted, auths = [], [], []
 
     def log_message(self, *a):
         pass
@@ -95,6 +95,15 @@ class Engine(http.server.BaseHTTPRequestHandler):
             self._json(200, {"input_tokens": tokens(text_of(body.get("messages") or [])),
                              "object": "response.input_tokens"})
             return
+        auth = self.headers.get("Authorization")
+        if auth != "Bearer test-key":
+            # llama.cpp compares the "Bearer " prefix exactly (measured on the v1.48 lane,
+            # 2026-11-12: a lowercase "bearer <key>", which the door admits as SGLang's own
+            # rule does, came back 401 "Invalid API Key")
+            self._json(401, {"error": {"code": 401, "message": "Invalid API Key",
+                                       "type": "authentication_error"}})
+            return
+        Engine.auths.append(auth)
         Engine.generated.append(self.path)
         self._json(200, {"id": "x", "object": "chat.completion", "model": SERVED,
                          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"},
@@ -131,15 +140,16 @@ class LlamaCppGuard(unittest.TestCase):
         Engine.window, Engine.slots = 262144, 2
         Engine.generated.clear()
         Engine.counted.clear()
+        Engine.auths.clear()
         self.mod.FLASH_PROMPT_CEILING_TOKENS = 0
         self.mod.invalidate_pool()
 
     def share(self, pool):
         return int(pool * (1.0 - self.mod.OVERSIZE_MARGIN_FRAC))
 
-    def post(self, path, doc):
+    def post(self, path, doc, auth="Bearer test-key"):
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=json.dumps(doc).encode(),
-                                     headers={"Content-Type": "application/json", "Authorization": "Bearer test-key"})
+                                     headers={"Content-Type": "application/json", "Authorization": auth})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 return r.status, r.read()
@@ -213,6 +223,26 @@ class LlamaCppGuard(unittest.TestCase):
             self.assertEqual(self.mod.qwen_effort_none(body, "/v1/chat/completions"), (body, False))
         finally:
             self.mod._SERVED["names"] = saved
+
+    def test_a_lowercase_bearer_scheme_reaches_the_engine_as_the_engine_spells_it(self):
+        # the door reads the scheme in any case (its rule is SGLang's, measured 2026-10-08:
+        # "bearer <key>" admitted), and v6.38 only stripped the whitespace around the value.
+        # llama.cpp is stricter than SGLang there: the same well-formed key sent as
+        # "bearer <key>" answered 401 on the live lane (2026-11-12), where every other lane
+        # served it. The door has already compared the key byte for byte (engine_admits), so
+        # the one thing the relay may still change is the scheme's spelling: name it the way
+        # the engine spells it, which is what the door accepted.
+        st, out = self.post("/v1/chat/completions",
+                            {"model": SERVED, "messages": [{"role": "user", "content": "hi"}]},
+                            auth="bearer test-key")
+        self.assertEqual(st, 200, out[:120])
+        self.assertEqual(Engine.auths[-1], "Bearer test-key")
+        # a wrong key under any spelling stays refused at the door, before the relay
+        st, _ = self.post("/v1/chat/completions",
+                          {"model": SERVED, "messages": [{"role": "user", "content": "hi"}]},
+                          auth="bearer wrong")
+        self.assertEqual(st, 401)
+        self.assertEqual(Engine.generated, ["/v1/chat/completions"], "only the admitted one reached the engine")
 
 
 if __name__ == "__main__":

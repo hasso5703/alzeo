@@ -77,6 +77,11 @@ its `/health`, its boot read in its container's log, its requests and its draft'
 its name (llama.cpp has neither route; closing the connection stops a generation, which the proxy does, as on vLLM), and
 System One points at the SGLang lanes, as the proxy does. Its mark is Unsloth's.
 
+**Proxy v6.56.** A client's bearer reaches the engine spelled the way the engine spells it: the door reads the scheme
+in any case, as SGLang's own check does (measured 2026-10-08), and llama.cpp compares the `Bearer ` prefix exactly, so
+a lowercase `bearer <key>` was 401 on the llama.cpp lane alone while every SGLang and vLLM lane served it (measured
+2026-11-12). The door has already compared the key byte for byte, so the relay normalizes the scheme and nothing else.
+
 **Proxy v6.55.** llama.cpp's engine is told by its `owned_by` (`llamacpp`): a client that leaves closes the upstream, the
 window is read from `/v1/models` (`meta.n_ctx`, one request's) and the pool is its slots' windows together (`/props`
 `total_slots`), so no prompt is taken for a wedge where the engine refuses past its window itself. A prompt is counted

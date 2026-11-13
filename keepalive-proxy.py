@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keepalive proxy in front of SGLang, vLLM or llama.cpp (v6.55). No content logging, and the only
+"""Keepalive proxy in front of SGLang, vLLM or llama.cpp (v6.56). No content logging, and the only
 rewriting is the tool-schema guard (role 4); two routes, POST /v1/systemone (role 5) and the
 operator's POST /proxy/stop (role 7), are answered here instead of relayed.
 
@@ -59,6 +59,13 @@ Ten roles, nothing else:
    lists every box's models (see "Two boxes behind one endpoint" below). A model both boxes serve is
    shared: a conversation stays on the box that holds its prefix, a new one goes to the box with the
    fewest requests in flight (v6.52, docs/pair.md).
+
+v6.56: a client's bearer reaches every engine spelled the way the engine spells it. The door reads the scheme in any
+case, as SGLang's own check does (measured 2026-10-08: "bearer <key>" admitted) and v6.38 only stripped the whitespace
+around the value, but llama.cpp compares the "Bearer " prefix exactly: the same well-formed key sent lowercase came
+back 401 "Invalid API Key" on the Unsloth lane (measured 2026-11-12) while every SGLang and vLLM lane served it. The
+door has already compared the key byte for byte (engine_admits), so the relay normalizes the scheme alone, and only
+when the value is exactly what the door admits: one space, the key after it.
 
 v6.55: the Qwen3.8 Flash-Next Unsloth GGUF lane (v1.48), served by llama.cpp's llama-server, which names itself
 "llamacpp" on /v1/models. Like vLLM it has none of SGLang's info, load or abort routes, and it stops a request whose
@@ -1228,7 +1235,17 @@ def _upstream_auth(handler):
     value = handler.headers.get("Authorization")
     # v6.38: without the whitespace around it, which is not part of a header's value (RFC 9110,
     # 5.5): SGLang reads it so, vLLM compares the value as it comes
-    return value.strip(" \t") if value else value
+    if not value:
+        return value
+    value = value.strip(" \t")
+    # v6.56: llama.cpp compares the "Bearer " prefix exactly (measured on the Unsloth lane,
+    # 2026-11-12), where the door's rule, SGLang's, admits the scheme in any case. The door has
+    # already compared the key byte for byte (engine_admits: one space, the key after it), so
+    # the scheme's spelling is the one thing still free here: name it as the engine spells it.
+    head, sep, rest = value.partition(" ")
+    if sep and rest and " " not in rest and head != "Bearer" and head.lower() == "bearer":
+        value = "Bearer " + rest
+    return value
 
 
 # The one route the identity wall leaves open: monitoring. Every other route needs a
