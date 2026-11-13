@@ -16,7 +16,7 @@ times, the KV cache in q8_0). Its n-gram table (26.8 GiB) stays on the disk, rea
 stopped the load at 5 GiB free. Its weights are copied into the GPU's memory (`--load-mode none`): read in place in the
 page cache (`mmap`), the same files decoded at 27.9 tok/s in the evening and about 25 at night, and side by side `none`
 gave 27.6 where `mmap` gave 24.9. With its two windows the lane holds 97,552 MiB of the GPU's at ready and left 20 GiB
-to a quiet box in the study, 14.2 at the lowest under the probes of two and four requests at once (12.8 to 17.8 GiB at
+to a quiet box in the study, 14.2 at the lowest under the probes of two and four requests at once (12.8 to 19.6 GiB at
 ready on the box as it ships, its other services running). Where its files sit (the USB SSD or
 the internal disk) made no difference to the decode, and it reads them where the cache keeps them, with no copy and no
 preload; from the USB SSD three starts of five took 261 to 281 s, their first answers slower, against 35 to 50 s from
@@ -54,7 +54,9 @@ prompt of 91,051 tokens computed 33 to 50 tokens a turn after the first, the fir
 dialect and Anthropic's, and a Claude Code and an opencode session of the proof's clients took their second request
 from the cache. Its prompt cache in host memory is capped at 2 GiB (`--cache-ram 2048`): at llama.cpp's own 8 GiB the
 GSM8K run took the box to 6.0 GiB available at the lowest, llama-server holding 11.9 GiB of host memory beside its GPU
-memory; TODO(measure): the lowest under the cap. Every number and the settings measured: `docs/flash-unsloth-lane.md`.
+memory; under the cap the same run kept 14.0 GiB available at the lowest, llama-server at 6.7 GiB, GSM8K 98.8 % again,
+and the agent's turns came from each window's cache as before (the 1M mode under the cap was not measured). Every
+number and the settings measured: `docs/flash-unsloth-lane.md`.
 
 **Its files, pinned one by one.** The repository holds every quantization of the model: the lane takes the four parts
 of one folder and the draft, each by its sha256 and its size (`PATH=SHA256:SIZE`, read from the Hub's LFS pointers and

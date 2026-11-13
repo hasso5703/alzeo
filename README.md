@@ -637,7 +637,7 @@ Since v1.48 a plain install includes a tenth lane, the first on [llama.cpp](http
 quantization (UD-Q4_K_XL: 76.9 GiB of weights), served by llama.cpp's own server from the image its project publishes,
 pinned by digest, with llama.cpp's n-gram lookup and ggml-org's DFlash2 draft (Q8_0) proposing tokens. The model's
 n-gram table (26.8 GiB) stays on the disk and is read row by row as the tokens need it (`--lazy-mode on`), so the lane
-holds 95.3 GiB of the GPU's memory at ready and leaves 12.8 to 17.8 GiB to the box (measured as it ships), with two requests at once, each with a window
+holds 95.3 GiB of the GPU's memory at ready and leaves 12.8 to 19.6 GiB to the box (measured as it ships), with two requests at once, each with a window
 of its own of 262,144 tokens; `FLASH_UNSLOTH_CONTEXT=1m ./install-flash-unsloth.sh --units-only` gives one request at a
 time a window of 1,048,576 tokens instead, from its next Load (YaRN at four times, 16.1 GiB left to the box at ready). It serves on the text port behind the same proxy
 and key, as model `qwen3.8-flash-next-unsloth`, OpenAI or Anthropic dialect alike, text only (the GGUF's vision

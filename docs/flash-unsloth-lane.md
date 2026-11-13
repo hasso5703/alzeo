@@ -277,11 +277,15 @@ the environment does not set it) and says why. The form comes back when llama.cp
 
 At ready, with its two windows, the lane holds 97,552 MiB of the GPU's (95.3 GiB) and the box kept 20 GiB available,
 14.2 at the lowest under the probes of the table above (b12291, 2026-11-12, a quiet box); on the box as it ships, with
-the rest of its services running, 12.8 to 17.8 GiB at ready in the lane's proofs (2026-11-12 and 13); with one window, 88,693 MiB (86.6 GiB) and
+the rest of its services running, 12.8 to 19.6 GiB at ready in the lane's proofs (2026-11-12 and 13); with one window, 88,693 MiB (86.6 GiB) and
 28 to 29 GiB; in its 1M mode, 100,881 MiB, 16.1 GiB at ready and 12.9 at the lowest, at the end of a prompt of 985,296
-tokens. The windows' KV cache is allocated at the start: a prompt does not grow it. TODO(measure): the peak of a long
-prompt and of two requests at once, the margin at that peak, and llama.cpp's prompt cache in host memory
-(`--cache-ram`, 8 GiB by default).
+tokens. The windows' KV cache is allocated at the start: a prompt does not grow it. What does grow is llama.cpp's cache
+of the prompts it served, kept in host memory for the requests after (`--cache-ram`, 8 GiB by default): under GSM8K's
+eight requests on the two windows it filled with entries of 1.5 to 5 GiB, llama-server held 11.9 GiB of host memory and
+the box kept 6.0 GiB available at the lowest (5.6 under HumanEval in the 1M mode). The unit caps it at 2 GiB
+(`--cache-ram 2048`): the same GSM8K run then kept 14.0 GiB available at the lowest, llama-server at 6.7 GiB, GSM8K 98.8 %
+again, and the agent's five turns came from each window's own cache as before, 33 to 50 tokens computed again a turn
+(2026-11-13). The 1M mode under the cap was not measured.
 
 ## A long prompt, the window, and an agent's next turn
 
