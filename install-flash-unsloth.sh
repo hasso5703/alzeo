@@ -177,7 +177,7 @@ FLASH_UNSLOTH_YARN=""
 # is not supported for architecture 'qwen4exp'", variantes-20261112-0429-contexte-b12291). q8_0 at 262,144, one request
 # (variantes-20261112-0704-contexte-q8-b12291): three codes of three at 250,000 tokens, that prompt computed at 659.8
 # tok/s against 676.0 in f16 (2.4 % less), 31 GiB available at ready against 27, its short decodes at temperature 0 at
-# 61.0 / 62.8 / 31.5 / 54.0 tok/s. TODO(measure): the answers' quality with the KV cache in q8_0.
+# 61.0 / 62.8 / 31.5 / 54.0 tok/s. Its answers' quality in q8_0 was measured with YaRN at four times, in the 1M mode below.
 FLASH_UNSLOTH_KV=""
 # FLASH_UNSLOTH_CONTEXT=1m: one request at a time with a window of 1,048,576 tokens, YaRN at four times, its KV cache in
 # q8_0 whatever KV says (the mode beside the default, decisions 1316 and 1318), as FLASH_LOCAL_CONTEXT=1m is the
@@ -185,8 +185,9 @@ FLASH_UNSLOTH_KV=""
 # alone): ready in 51 s, 100,881 MiB of the GPU's, 16.1 GiB available at ready, 13.9 through a prompt of 985,296 tokens
 # and 12.9 at the lowest, at its end (the box's telemetry); three codes of three found in it, computed at 440.2 tok/s;
 # short texts decoded at temperature 0 at 58.2 / 62.1 / 31.4 / 51.6 tok/s, where one request at 262,144 in q8_0 gave
-# 61.0 / 62.8 / 31.5 / 54.0 (variantes-20261112-0704-contexte-q8-b12291). TODO(measure): the answers' quality under YaRN
-# at four times. Kept for the runs after in a file of its own: a Load from the cockpit stages the unit with none of the
+# 61.0 / 62.8 / 31.5 / 54.0 (variantes-20261112-0704-contexte-q8-b12291). Its answers through the proxy: GSM8K 98.0 % and
+# HumanEval 98.2 % (the lane's second proof, 2026-11-13; at the native window GSM8K 98.8 % in that proof, HumanEval 99.4 %
+# in the study). Kept for the runs after in a file of its own: a Load from the cockpit stages the unit with none of the
 # user's environment. native (or empty) brings the default back. The choice is read past the uninstall, which removes
 # it, and kept by the render that takes it, and by --prepare.
 CONTEXT_CHOICE="$CONFIG_DIR/flash-unsloth-context"

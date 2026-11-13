@@ -15,8 +15,9 @@ times, the KV cache in q8_0). Its n-gram table (26.8 GiB) stays on the disk, rea
 (`--lazy-mode on`): without it the GB10, an integrated GPU, loads the table with the weights, and the box's memory guard
 stopped the load at 5 GiB free. Its weights are copied into the GPU's memory (`--load-mode none`): read in place in the
 page cache (`mmap`), the same files decoded at 27.9 tok/s in the evening and about 25 at night, and side by side `none`
-gave 27.6 where `mmap` gave 24.9. With its two windows the lane holds 97,552 MiB of the GPU's at ready and leaves 20 GiB
-to the box, 14.2 at the lowest under the probes of two and four requests at once. Where its files sit (the USB SSD or
+gave 27.6 where `mmap` gave 24.9. With its two windows the lane holds 97,552 MiB of the GPU's at ready and left 20 GiB
+to a quiet box in the study, 14.2 at the lowest under the probes of two and four requests at once (12.8 to 17.8 GiB at
+ready on the box as it ships, its other services running). Where its files sit (the USB SSD or
 the internal disk) made no difference to the decode, and it reads them where the cache keeps them, with no copy and no
 preload; from the USB SSD three starts of five took 261 to 281 s, their first answers slower, against 35 to 50 s from
 the internal disk. Measured one request at a time at the model card's sampling on the pinned image, its files on the USB
@@ -40,13 +41,20 @@ for this model, and the installer takes f16 or q8_0 (q8_0 read the window whole 
 with 4 GiB more left to the box, and no evaluation of the answers ran in it). The 1M mode: 100,881 MiB of the GPU's at
 ready, 16.1 GiB left to the box and 12.9 at the lowest, three codes of three found in a prompt of 985,296 tokens,
 computed at 440.2 tok/s; through the proxy a prompt may have 964,689 tokens there, and opencode, pi and `claude-local`
-get a context of 830,000 tokens and 32,000 out (205,000 at the native window); TODO(measure): the quality of its
-answers. GSM8K 98.4 % (250 questions) and HumanEval 99.4 % (164 problems) at the `medium` effort and temperature 0, and
+get a context of 830,000 tokens and 32,000 out (205,000 at the native window), and its answers held: GSM8K 98.0 % (250 questions) and HumanEval 98.2 % (164 problems, pass@1)
+through the proxy (2026-11-13). GSM8K 98.4 % (250 questions) and HumanEval 99.4 % (164 problems) at the `medium` effort and temperature 0, and
 20 tool calls right out of 20 (b12291 built on the box, the DFlash2 draft alone); MMLU not measured. These are measures
 of minutes run back to back, during which the box's hottest zone peaked at 88 to 95.5 °C: no continuous load was
-measured. TODO(measure): several requests at once with the table on the USB SSD, the eight clients, the prefix cache
-through the proxy, the memory at a long prompt's peak, the same under the unit's `--memory 110g`. Every number and the
-settings measured: `docs/flash-unsloth-lane.md`.
+measured. On the box (the lane's second proof, 2026-11-13, its unit's `--memory 110g`, before the prompt cache's cap
+below): ready in 52 s,
+`bench.sh`'s greedy median at 64.1 tok/s on a freshly started engine; the eight clients through the proxy; GSM8K 98.8 %
+again through the proxy, eight requests at once on its two windows with its table on the USB SSD, 62.9 tok/s in all
+(no more than one request alone on that disk); its prompt cache through the proxy: an agent's five turns on a system
+prompt of 91,051 tokens computed 33 to 50 tokens a turn after the first, the first token in 0.5 to 0.6 s, in OpenAI's
+dialect and Anthropic's, and a Claude Code and an opencode session of the proof's clients took their second request
+from the cache. Its prompt cache in host memory is capped at 2 GiB (`--cache-ram 2048`): at llama.cpp's own 8 GiB the
+GSM8K run took the box to 6.0 GiB available at the lowest, llama-server holding 11.9 GiB of host memory beside its GPU
+memory; TODO(measure): the lowest under the cap. Every number and the settings measured: `docs/flash-unsloth-lane.md`.
 
 **Its files, pinned one by one.** The repository holds every quantization of the model: the lane takes the four parts
 of one folder and the draft, each by its sha256 and its size (`PATH=SHA256:SIZE`, read from the Hub's LFS pointers and
@@ -81,6 +89,10 @@ System One points at the SGLang lanes, as the proxy does. Its mark is Unsloth's.
 in any case, as SGLang's own check does (measured 2026-10-08), and llama.cpp compares the `Bearer ` prefix exactly, so
 a lowercase `bearer <key>` was 401 on the llama.cpp lane alone while every SGLang and vLLM lane served it (measured
 2026-11-12). The door has already compared the key byte for byte, so the relay normalizes the scheme and nothing else.
+And `X-Conversation-Id` stays at the door: llama-server attaches a request carrying it to a resumable stream, which
+stops when the stream is cancelled and never when its connection closes (its `server-stream.cpp`), so closing, how the
+proxy and the cockpit's memory floor stop a generation on llama.cpp, left it running to its end. SGLang and vLLM ignore
+it, and none of the clients proven here sends it.
 
 **Proxy v6.55.** llama.cpp's engine is told by its `owned_by` (`llamacpp`): a client that leaves closes the upstream, the
 window is read from `/v1/models` (`meta.n_ctx`, one request's) and the pool is its slots' windows together (`/props`

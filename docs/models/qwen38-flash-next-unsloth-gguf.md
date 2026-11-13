@@ -24,9 +24,10 @@ lookup and ggml-org's GGUF of the DFlash2 draft, as a lane of its own beside the
   three in 985,296 tokens, the KV cache in q8_0).
 - GSM8K **98.4 %** (250 questions) and HumanEval **99.4 %** (164 problems) at the medium effort and temperature 0, and
   20 tool calls right out of 20 (llama.cpp b12291 built on the box, the DFlash2 draft alone); MMLU not measured.
-  TODO(measure): its quality in its 1M mode.
-- **95.3 GiB** of the GPU's memory at ready with its two windows and its draft, **20 GiB** left to the box, 14.2 at the
-  lowest under its probes; 98.5 GiB and 16.1 left in its 1M mode.
+  In its 1M mode (YaRN at four times, the KV cache in q8_0): GSM8K 98.0 % (250 questions) and HumanEval 98.2 % (164 problems, pass@1).
+- **95.3 GiB** of the GPU's memory at ready with its two windows and its draft, **12.8 to 17.8 GiB** left to the box at
+  ready as it ships (20 on a quiet box in the study, 14.2 at its lowest under the study's probes); 98.5 GiB and 14.3 to
+  16.1 left in its 1M mode.
 - A window shared by several requests (`-kvu`) is refused for now: llama-server stopped itself under load in four
   of the nine runs that shared one (2026-11-12, llama.cpp's open issue 31656; the lane page has the numbers).
 - Ready in 35 to 50 s with its files on the internal disk, 50 to 281 s from a USB SSD.

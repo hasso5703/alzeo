@@ -51,7 +51,7 @@ ExecStartPre=/bin/bash __HOME__/.config/qwen38/engine-preflight.sh qwen38-flash-
 #   --cache-ram 2048: the prompts it keeps in host memory for the requests after, beside its windows, capped at 2 GiB
 #     (decision 1349): at llama.cpp's own 8 GiB, GSM8K's eight requests on its two windows filled it with entries of 1.5
 #     to 5 GiB, its process held 11.9 GiB beside its 95.3 GiB of GPU memory, and the box kept 6.0 GiB available at the
-#     lowest, 20 at ready (2026-11-13). Each window keeps its own cache: an agent's turns on one of them computed 33 to 50
+#     lowest, 14.8 at ready (2026-11-13). Each window keeps its own cache: an agent's turns on one of them computed 33 to 50
 #     tokens each again; a third long conversation resumed later is the one computed again.
 #   --alias: the name it serves under (llama-server has no --served-model-name); --metrics: its Prometheus
 #     endpoint, which the cockpit reads with the key; --no-ui: the web interface the server embeds is off, the
@@ -66,8 +66,8 @@ ExecStartPre=/bin/bash __HOME__/.config/qwen38/engine-preflight.sh qwen38-flash-
 # this lane does not listen, and docker would call the container unhealthy; the proxy and the cockpit ask
 # /health on the lane's port.
 # --memory 110g: the cap the other lanes run under (FP4-Local's and Ornith's value); the study's measures ran without
-# it. Under it (the lane's proofs, 2026-11-12 and 13): ready in 120 s after another lane had held the memory and in 50
-# to 55 s on a restart, and bench.sh's greedy median at 64.1 tok/s on a freshly started engine.
+# it. Under it (the lane's proofs, 2026-11-12 and 13): ready 52 to 122 s after another lane stopped and 52 to 55 s on a
+# restart, and bench.sh's greedy median at 64.1 tok/s on a freshly started engine.
 ExecStart=/bin/bash -c 'check=__HOME__/.config/qwen38/llamacpp-files.sh; [ -f "$$check" ] || { echo "preflight: qwen38-flash-unsloth.service lacks its files: $$check is missing (the check of its files). Load the lane from the cockpit, or run ./switch-model.sh flash-unsloth" >&2; exit 78; }; \
   bash "$$check" qwen38-flash-unsloth.service flash-unsloth __FILES__ || exit $$?; \
   exec /usr/bin/docker run --rm --name qwen38-flash-unsloth --gpus all \

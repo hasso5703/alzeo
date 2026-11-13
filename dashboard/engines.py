@@ -54,8 +54,8 @@ ENGINES = {
     # image inspect on the reference box, 2026-11-12). llama.cpp numbers its versions by build, and its /props says
     # build_info as "b<build>-<commit>" (common/build-info.cpp.in), the commit as git shortens it: 9 characters in
     # b12282's image, measured first, whose llama-server --version said "version: 0.9.0-dev (build 12282, commit
-    # aa75ff323)" (2026-11-11), hence 5d4c8eeb2 here. TODO(measure): the build_info /props says on the box, at the
-    # lane's first proof.
+    # aa75ff323)" (2026-11-11), hence 5d4c8eeb2 here, and its /props said "b12316-5d4c8eeb2" on the box at the lane's
+    # first proof (2026-11-12, in both of its windows).
     "qwen38-flash-unsloth.service": {
         "engine": "llama.cpp", "version": "b12316", "reports": "b12316-5d4c8eeb2",
         "pin": "ghcr.io/ggml-org/llama.cpp@sha256:a5600a59c704208491adbb96505454a8d3d4cd3a9db48b03cf2760b660b7fd16"},

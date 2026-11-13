@@ -82,10 +82,13 @@ starts on 2026-11-12, and in 50 and 90 s in two others; from the internal disk, 
 slow starts the first answers came slower too: in code, 23.2 tok/s at the first pass against 28.2 at the second with no
 draft, 36.1 against 58.5 and 34.2 against 40.4 with the DFlash2 draft, and the reasoning that came next 48.1 against
 62.6 and 41.6 against 56.3, which fits the table being read from the disk as the tokens need it. How much of a slow
-start the page cache explains and how much the disk was not measured. TODO(measure): several requests at once with the
-table on the USB SSD (the measures of them read it from the internal disk): the Qwen3.8 Flash-Next FP4-Local lane reads
-its table at every token too, and from a USB SSD eight of its requests decoded no faster than one, which is why its Load
-copies its table beside the home directory when the cache is on another disk.
+start the page cache explains and how much the disk was not measured. Several requests at once with the table on the
+USB SSD (the study's measures of them read it from the internal disk): GSM8K's 250 questions, eight requests at once
+through the proxy on the lane's two windows, generated 62.9 tok/s in all (62.8 the day before), where one request alone
+decodes at 64.1 in `bench.sh`'s greedy probes: two requests at once gave no more in all than one, as eight requests of
+the Qwen3.8 Flash-Next FP4-Local lane decoded no faster than one from a USB SSD (which is why its Load copies its table
+beside the home directory when the cache is on another disk). The texts differ (GSM8K reasons at the `medium` effort),
+and how much of it the disk explains was not measured.
 
 ## The engine: llama.cpp's own image
 
@@ -131,8 +134,10 @@ The unit runs it as every lane runs its engine (`qwen38-flash-unsloth.service.te
   and `/v1/health` (read in its `server-http.cpp`), on the text port of this box alone. `LLAMA_ARG_HOST` and
   `LLAMA_ARG_PORT` are set to the same values, since the image sets 0.0.0.0 and 8080; and `--no-healthcheck`, since the
   image's own check asks port 8080.
-- The Hugging Face cache read-only, and `--memory 110g`, the cap of the other lanes. TODO(measure): the same readiness and
-  speed under the cap (the study ran without it).
+- The Hugging Face cache read-only, and `--memory 110g`, the cap of the other lanes. The study ran without it; under it,
+  in the lane's proofs (2026-11-12 and 13), the lane was ready 52 to 122 s after another lane stopped and 52 to 55 s on
+  a restart, and `bench.sh` gave a greedy median of 64.1 tok/s on a freshly started engine (code 63.3,
+  reasoning 64.9, math at temperature 0.6 58.7, prose 30.9 apart from the median, each probe's first run).
 
 The model card's sampling (temperature 1.0, top_p 0.95, top_k 20) is in the GGUF, and the server applies it to a request
 that sets none (read in `/props`).
@@ -189,7 +194,7 @@ tokens drafted and accepted in reasoning and in prose (319 of 484 and 209 of 488
 and takes the pair (`FLASH_UNSLOTH_SPEC` in the installer), within 4 % of the draft alone on b12282's image in code and
 in reasoning, as fast in prose, 2.4 times as fast in a rewrite of code. The draft alone on b12316's image is no witness:
 that start was one of the slow ones (261 s), and so were its first answers (34.2 tok/s in code, then 40.4 and 42.3,
-where b12282's image gave 52.5 to 56.6). TODO(measure): the draft alone on b12316's image after a quick start.
+where b12282's image gave 52.5 to 56.6). The draft alone on b12316's image after a quick start was not measured.
 
 ## Quality
 
@@ -197,7 +202,12 @@ Measured on 2026-11-12 with llama.cpp b12291 built on the box, the lane's files 
 n-gram lookup, eight requests at once of 20,480 tokens each, at the `medium` effort and temperature 0: GSM8K 98.4 %
 (250 questions, 299 tokens an answer), HumanEval 99.4 % (164 problems, pass@1, 621 tokens an answer), and 20 tool calls
 right out of 20. MMLU was not measured. These ran without YaRN and with the KV cache in f16, as the lane serves by
-default. TODO(measure): GSM8K and HumanEval in its 1M mode (YaRN at four times, the KV cache in q8_0).
+default. In its 1M mode (YaRN at four times, the KV cache in q8_0), through the proxy on the pinned image (the lane's
+second proof, 2026-11-13, eight requests at once on its one window): GSM8K 98.0 % (250 questions) and HumanEval 98.2 % (164 problems, pass@1), at the same effort and
+temperature; at its native window the same proof gave GSM8K 98.8 % again. Those runs and the native GSM8K were 75 min of
+continuous load: the box's hottest zone peaked at 94.4 °C, at 90 °C or more in 109 of 2,256 readings, no throttling
+flagged; the GPU clock cap of the cockpit's Machine view lowers it (2,000 MHz: 8 °C less on the FP4-Local lane's load,
+[cockpit](cockpit.md)).
 
 ## The chat template
 
@@ -265,8 +275,9 @@ the environment does not set it) and says why. The form comes back when llama.cp
 
 ## Memory
 
-At ready, with its two windows, the lane holds 97,552 MiB of the GPU's (95.3 GiB) and the box keeps 20 GiB available,
-14.2 at the lowest under the probes of the table above (b12291, 2026-11-12); with one window, 88,693 MiB (86.6 GiB) and
+At ready, with its two windows, the lane holds 97,552 MiB of the GPU's (95.3 GiB) and the box kept 20 GiB available,
+14.2 at the lowest under the probes of the table above (b12291, 2026-11-12, a quiet box); on the box as it ships, with
+the rest of its services running, 12.8 to 17.8 GiB at ready in the lane's proofs (2026-11-12 and 13); with one window, 88,693 MiB (86.6 GiB) and
 28 to 29 GiB; in its 1M mode, 100,881 MiB, 16.1 GiB at ready and 12.9 at the lowest, at the end of a prompt of 985,296
 tokens. The windows' KV cache is allocated at the start: a prompt does not grow it. TODO(measure): the peak of a long
 prompt and of two requests at once, the margin at that peak, and llama.cpp's prompt cache in host memory
@@ -295,8 +306,11 @@ window for each request, so with it set `FLASH_UNSLOTH_SLOTS=1`, since a second 
 answers ran in q8_0.
 
 At its native window the proxy keeps the flash model's ceiling of 250,000 tokens a prompt, and the Load gives opencode,
-pi and `claude-local` the flash lane's limits, a context of 205,000 tokens and 32,000 for the answer. TODO(measure):
-opencode and Claude Code sessions through the proxy (`prefix_probe.py`).
+pi and `claude-local` the flash lane's limits, a context of 205,000 tokens and 32,000 for the answer. Its prompt cache
+through the proxy, measured on its counters (`llamacpp:prompt_tokens_total` and `prompt_tokens_cached_total`, 2026-11-13):
+an agent's five turns on a system prompt of 91,051 tokens computed it once (124 s to the first token in OpenAI's dialect,
+128 s in Anthropic's), then 33 to 50 tokens a turn, the first token in 0.5 to 0.6 s; a Claude Code session and an opencode
+session of the proof's own clients each took their second request from the cache (13,779 and 37,020 tokens).
 
 ## A window of 1,048,576 tokens for one request: FLASH_UNSLOTH_CONTEXT=1m
 
@@ -325,7 +339,8 @@ The choice is kept for the Loads after (a Load from the cockpit stages the unit 
 At 1M the proxy relays a prompt up to 92 % of the window (964,689 tokens), and the Load gives opencode, pi and
 `claude-local` a context of 830,000 tokens and 32,000 for the answer (the FP4-Local lane's rule at its 1M: the proxy's
 share of the window, 92 %, less 10 % holds both, 830,000 + 32,000 = 862,000 <= 868,220), and the cockpit's Lanes and Now views say 1M tokens of context. A second request waits until
-the first ends. TODO(measure): the quality of the answers under YaRN at four times.
+the first ends. Its answers under YaRN at four times: GSM8K 98.0 % (250 questions) and HumanEval 98.2 % (164 problems, pass@1) through the proxy (2026-11-13,
+the Quality section).
 
 ## What it does not have
 
