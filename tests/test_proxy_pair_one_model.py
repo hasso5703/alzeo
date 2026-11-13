@@ -102,6 +102,15 @@ class TwoBoxesServeOneModel(PairFixture, unittest.TestCase):
             time.sleep(0.05)
         return threads
 
+    def until_running(self, n, within=10.0):
+        """Until this box says it runs n generations, as the other box reads it on its pair list: what the entry weighs
+        at its next decision. A request's client has its answer before the entry's handler ends and counts it no more:
+        a turn sent at once was weighed with one more here than the test had set, the last request of the test before
+        or the turn before (CI, 2026-11-13: "two idle boxes" served by spark2)."""
+        said = lambda: json.loads(self.tls_call(self.pport1, "/v1/models", method="GET")[1]).get("x_alzeo_running")
+        if not _until(lambda: said() == n, within):
+            self.fail(f"this box says it runs {said()} generations, not the {n} of the test")
+
     def test_a_conversation_stays_on_the_box_that_served_it(self):
         a, b = self.turns("conv-a", 2), self.turns("conv-b", 1)
         # spark1 runs 2, spark2 none: a new conversation goes to spark2
@@ -265,12 +274,14 @@ class TwoBoxesServeOneModel(PairFixture, unittest.TestCase):
 
     def test_boxes_far_apart_share_even_a_conversation(self):
         a = self.turns("conv-c", 3)
+        self.until_running(0)
         st, out, _ = self.call("/v1/chat/completions", a[0])
         self.assertEqual(st, 200, out[:300])
         self.assertIn(b"from spark1", out, "two idle boxes: the entry serves it, no hop")
         # the edge, pinned (review, 2026-11-03): spark1 runs 4, spark2 none: 4 apart is not more than 4, the turn stays
         # on the box that holds its prefix
         held = self.busy(self.E1, self.port1, KEY_1, "local-only", 4, 4.0)
+        self.until_running(4)
         st, out, _ = self.call("/v1/chat/completions", a[1])
         self.assertEqual(st, 200, out[:300])
         self.assertIn(b"from spark1", out, "4 apart moved a conversation off the box that holds its prefix")
@@ -279,6 +290,7 @@ class TwoBoxesServeOneModel(PairFixture, unittest.TestCase):
         self.E1.users.clear()
         # spark1 runs 5, spark2 none: more than 4 apart and more than 1.5 times as many, the turn goes to spark2
         self.busy(self.E1, self.port1, KEY_1, "local-only", 5, 3.0)
+        self.until_running(5)
         st, out, _ = self.call("/v1/chat/completions", a[2])
         self.assertEqual(st, 200, out[:300])
         self.assertIn(b"from spark2", out, "5 apart kept a conversation on the busier box")
