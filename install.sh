@@ -2857,18 +2857,19 @@ if [ -f "$OC_USER_CFG" ]; then
   # The Qwen3.8 Flash-Next FP4-Local lane's pair follows its unit's window (FLASH_LOCAL_CONTEXT=1m): --add-providers
   # above adds a missing provider only, and the compaction block is sized from this pair when the lane boots (second
   # review of v1.45.2). A config edited by hand that refuses the pair is said, as switch-model.sh says it: the update
-  # kept the old pair without a word (code review of v1.48.0, 2026-11-12)
+  # kept the old pair without a word (code review of v1.48.0, 2026-11-12). Its 3, "not in path: nothing to merge", is a
+  # config of the user's own with neither entry, and says nothing (review of v1.48.0, 2026-11-13)
   if [ "$OC_FLASH_LOCAL" -eq 1 ] && [ -n "$OC_FLASH_LOCAL_CTX" ]; then
     python3 "$REPO_DIR/oc-merge-limits.py" "$OC_USER_CFG" flash-local qwen3.8-flash-next-fp4 \
       "$OC_FLASH_LOCAL_CTX" "$OC_FLASH_LOCAL_OUT" >/dev/null \
-      || echo "NOTE: could not update the Qwen3.8 Flash-Next FP4-Local limits in $OC_USER_CFG; check them by hand ($OC_FLASH_LOCAL_CTX $OC_FLASH_LOCAL_OUT)"
+      || { [ $? -eq 3 ] || echo "NOTE: could not update the Qwen3.8 Flash-Next FP4-Local limits in $OC_USER_CFG; check them by hand ($OC_FLASH_LOCAL_CTX $OC_FLASH_LOCAL_OUT)"; }
   fi
   # and the Qwen3.8 Flash-Next Unsloth GGUF lane's follows its unit's window the same way (2026-11-12: 262,144 by
   # default, 1,048,576 in its 1M mode)
   if [ "${OC_FLASH_UNSLOTH:-0}" -eq 1 ] && [ -n "${OC_FLASH_UNSLOTH_CTX:-}" ]; then
     python3 "$REPO_DIR/oc-merge-limits.py" "$OC_USER_CFG" flash-unsloth qwen3.8-flash-next-unsloth \
       "$OC_FLASH_UNSLOTH_CTX" "$OC_FLASH_UNSLOTH_OUT" >/dev/null \
-      || echo "NOTE: could not update the Qwen3.8 Flash-Next Unsloth GGUF limits in $OC_USER_CFG; check them by hand ($OC_FLASH_UNSLOTH_CTX $OC_FLASH_UNSLOTH_OUT)"
+      || { [ $? -eq 3 ] || echo "NOTE: could not update the Qwen3.8 Flash-Next Unsloth GGUF limits in $OC_USER_CFG; check them by hand ($OC_FLASH_UNSLOTH_CTX $OC_FLASH_UNSLOTH_OUT)"; }
   fi
 fi
 # The default model and the served entry's picker name follow the install, not

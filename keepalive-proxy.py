@@ -65,7 +65,10 @@ case, as SGLang's own check does (measured 2026-10-08: "bearer <key>" admitted) 
 around the value, but llama.cpp compares the "Bearer " prefix exactly: the same well-formed key sent lowercase came
 back 401 "Invalid API Key" on the Unsloth lane (measured 2026-11-12) while every SGLang and vLLM lane served it. The
 door has already compared the key byte for byte (engine_admits), so the relay normalizes the scheme alone, and only
-when the value is exactly what the door admits: one space, the key after it.
+when the value is exactly what the door admits: one space, the key after it. And X-Conversation-Id stays at the door:
+llama-server attaches a request carrying it to a resumable stream that stops when the stream is cancelled, never when
+its connection closes (server-stream.cpp, b12291; found in review of v1.48.0), so closing, the abort of the llama.cpp
+lanes (CLOSE_ABORTS), and the memory floor's stop left it running to its end.
 
 v6.55: the Qwen3.8 Flash-Next Unsloth GGUF lane (v1.48), served by llama.cpp's llama-server, which names itself
 "llamacpp" on /v1/models. Like vLLM it has none of SGLang's info, load or abort routes, and it stops a request whose
@@ -5981,7 +5984,12 @@ class H(BaseHTTPRequestHandler):
         # route: SGLang aborts by prefix, and their rids "0" to "f" ended every generation here (found in reviews,
         # 2026-11-03); nor vLLM's X-Request-Id
         not_its_own = self._rid_not_its_own()
+        # X-Conversation-Id stays at the door (v6.56): llama-server attaches a request carrying it to a resumable
+        # stream, which stops when the stream is cancelled and never when its connection closes (server-stream.cpp,
+        # b12291), so a client that left, and the memory floor's stop, left it generating to its end. Nothing here
+        # reads it, and SGLang and vLLM ignore it.
         h = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() != PAIR_HOP.lower()
+             and k.lower() != "x-conversation-id"
              and not (k.lower().startswith("x-override-") and (k.lower() != "x-override-rid" or not_its_own))
              and not (not_its_own and k.lower() == "x-request-id")}
         auth = _upstream_auth(self)

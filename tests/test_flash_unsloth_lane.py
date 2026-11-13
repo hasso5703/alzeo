@@ -804,6 +804,26 @@ class TheInstallSetsTheUsersOpencodeForTheWindow(unittest.TestCase):
         self.assertEqual((c["flash-local"]["models"]["qwen3.8-flash-next-fp4"]["limit"],
                           c["flash-unsloth"]["models"]["qwen3.8-flash-next-unsloth"]["limit"]), (5, 5))
 
+    def test_a_config_of_the_users_own_with_none_of_these_providers_is_left_in_peace(self):
+        # oc-merge-limits.py says 3, "not in path: nothing to merge", for a config that has neither lane's entry: the
+        # user's own, which the block above leaves to them (no --add-providers). The note "could not update ... check
+        # them by hand" was printed to it at every update (review of v1.48.0, 2026-11-13); only a refusal is said
+        start = self.TEXT.index('if [ -f "$OC_USER_CFG" ]; then\n  if [ "${LANE:-27b}" = "flash" ]; then')
+        block = self.TEXT[start:self.TEXT.index("# The default model and the served entry's picker name follow the install", start)]
+        d = pathlib.Path(tempfile.mkdtemp(prefix="flu-install-oc-own-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        cfg = d / "opencode.json"
+        cfg.write_text(json.dumps({"provider": {"openai": {"models": {"gpt-x": {"limit": {"context": 1000, "output": 10}}}}}},
+                                  indent=2) + "\n")
+        script = "\n".join(["set -uo pipefail", f'REPO_DIR="{REPO}"', f'OC_USER_CFG="{cfg}"', "LANE=27b",
+                            "OC_CTX=547000 OC_OUT=182000 OC_KEEP=205000 CONTEXT_MODE=1m _ENV_CONTEXT_MODE= MEM_CLASS=128",
+                            f'SGL_UNIT_PATH="{d}/none.service"', "OC_FLASH_LOCAL=1 OC_FLASH_LOCAL_CTX=840000 OC_FLASH_LOCAL_OUT=32000",
+                            "OC_FLASH_UNSLOTH=1 OC_FLASH_UNSLOTH_CTX=830000 OC_FLASH_UNSLOTH_OUT=32000", block])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+                           env={"PATH": "/usr/bin:/bin", "HOME": str(d)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("NOTE: could not update", r.stdout)
+
     def test_flash_unsloth_context_is_not_read_by_the_install(self):
         start = self.TEXT.index('if [ -n "${FLASH_UNSLOTH_CONTEXT+set}" ]; then')
         block = self.TEXT[start:self.TEXT.index("\nfi\n", start) + 4]

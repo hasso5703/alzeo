@@ -52,7 +52,7 @@ class Engine(http.server.BaseHTTPRequestHandler):
     """llama-server as the proxy meets it: its models, props and metrics, its two count routes, and generations."""
     protocol_version = "HTTP/1.1"
     window, slots = 262144, 2
-    generated, counted, auths = [], [], []
+    generated, counted, auths, convs = [], [], [], []
 
     def log_message(self, *a):
         pass
@@ -104,6 +104,7 @@ class Engine(http.server.BaseHTTPRequestHandler):
                                        "type": "authentication_error"}})
             return
         Engine.auths.append(auth)
+        Engine.convs.append(self.headers.get("X-Conversation-Id"))
         Engine.generated.append(self.path)
         self._json(200, {"id": "x", "object": "chat.completion", "model": SERVED,
                          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"},
@@ -141,15 +142,16 @@ class LlamaCppGuard(unittest.TestCase):
         Engine.generated.clear()
         Engine.counted.clear()
         Engine.auths.clear()
+        Engine.convs.clear()
         self.mod.FLASH_PROMPT_CEILING_TOKENS = 0
         self.mod.invalidate_pool()
 
     def share(self, pool):
         return int(pool * (1.0 - self.mod.OVERSIZE_MARGIN_FRAC))
 
-    def post(self, path, doc, auth="Bearer test-key"):
+    def post(self, path, doc, auth="Bearer test-key", headers=None):
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=json.dumps(doc).encode(),
-                                     headers={"Content-Type": "application/json", "Authorization": auth})
+                                     headers={"Content-Type": "application/json", "Authorization": auth, **(headers or {})})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 return r.status, r.read()
@@ -244,6 +246,21 @@ class LlamaCppGuard(unittest.TestCase):
                             auth="bearer wrong")
         self.assertEqual((st, out), (401, self.mod.ENGINE_401_BODY))
         self.assertEqual(Engine.generated, ["/v1/chat/completions"], "only the admitted one reached the engine")
+
+    def test_a_conversation_id_never_reaches_the_engine(self):
+        # llama-server attaches a request carrying X-Conversation-Id to a resumable stream, and then stops it only when
+        # the stream is cancelled (DELETE /v1/stream), never when its connection closes: server_res_spipe::should_stop
+        # and on_complete, tools/server/server-stream.cpp of b12291 (read 2026-11-13). Relayed, it would let a client
+        # that left, and the memory floor's stop, leave a generation running to its end on one of the two windows.
+        # The proxy does not use it, and SGLang and vLLM ignore it: it stays at the door, in any case.
+        for name in ("X-Conversation-Id", "x-conversation-id"):
+            with self.subTest(header=name):
+                Engine.convs.clear()
+                st, out = self.post("/v1/chat/completions",
+                                    {"model": SERVED, "messages": [{"role": "user", "content": "hi"}]},
+                                    headers={name: "conv-1"})
+                self.assertEqual(st, 200, out[:120])
+                self.assertEqual(Engine.convs, [None])
 
 
 if __name__ == "__main__":
