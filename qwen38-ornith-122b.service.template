@@ -90,7 +90,7 @@ ExecStartPre=/bin/bash __HOME__/.config/qwen38/engine-preflight.sh qwen38-ornith
 # for 277,608 tokens, 416 s before). A share of "auto" served them less well (86 s at the median, 161 s at
 # worst), and steps of 8,192 tokens made a prompt alone 5 % faster but kept 8 requests of 80 waiting 668 to
 # 777 s for their first token (docs/ornith-lane.md).
-ExecStart=/bin/bash -c 'exec /usr/bin/docker run --rm --name qwen38-ornith-122b --gpus all \
+ExecStart=/bin/bash -c '/usr/bin/docker run --rm --name qwen38-ornith-122b --gpus all \
   --memory 110g --memory-swap 110g --shm-size 16g --network host --ipc=host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
   --security-opt seccomp=__HOME__/.config/qwen38/seccomp-io-uring.json \
@@ -139,11 +139,20 @@ ExecStart=/bin/bash -c 'exec /usr/bin/docker run --rm --name qwen38-ornith-122b 
     --reasoning-parser qwen3 --tool-call-parser qwen3_xml --enable-auto-tool-choice --enable-prompt-tokens-details \
     --allowed-media-domains media.invalid \
     --middleware vllm_engine_auth.RequireKey \
-    --host __ENGINE_BIND__ --port __PORT__'
+    --host __ENGINE_BIND__ --port __PORT__ \
+  || { rc=$$?; [ -e "$$RUNTIME_DIRECTORY/stopping" ] && exit 143; exit $$rc; }'
+ExecStop=-/bin/bash -c 'touch "$$RUNTIME_DIRECTORY/stopping"'
 ExecStop=-/usr/bin/docker stop -t 20 qwen38-ornith-122b
 Restart=always
-# docker stops vLLM with SIGTERM (143) or SIGKILL (137) on a plain stop: a clean stop, not a failure
+# docker stops vLLM with SIGTERM (143) or SIGKILL (137) on a plain stop: a clean stop, not a failure.
+# A stop while the engine loads: vLLM turns the SIGTERM into KeyboardInterrupt("terminated") until it
+# serves and, PID 1 in its container, exits 1, which left the unit failed after a plain stop (the
+# reference box, 2026-11-13). The stop marks itself first, in the unit's runtime directory (systemd
+# removes it each time the unit stops, a restart of its own included), and ExecStart, which waits
+# on docker run where it exec'ed it, exits 143 for a stop it was asked, whatever the engine's code,
+# else with docker run's: a crash stays a failure, started again.
 SuccessExitStatus=137 143
+RuntimeDirectory=qwen38-ornith-122b
 RestartSec=15
 
 [Install]

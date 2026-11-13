@@ -122,8 +122,8 @@ class TheStagedUnit(unittest.TestCase):
     def guard(self, unit: str, tries: int = 0) -> list:
         """The check at the head of the unit's ExecStart, as bash runs it, with its tries of 3 s set."""
         cmd = exec_command(unit)
-        self.assertIn("exec /usr/bin/docker run", cmd)
-        head = cmd[:cmd.index("exec /usr/bin/docker run")].strip()
+        self.assertIn("/usr/bin/docker run", cmd)
+        head = cmd[:cmd.index("/usr/bin/docker run")].strip()
         script = f"{self.box.home}/.config/qwen38/flash-local-files.sh"
         # the check named once, there before it runs (else 78 and its line), then run
         self.assertTrue(head.startswith(f"check={script}; ") and 'bash "$check" ' in head, head)
