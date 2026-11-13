@@ -528,8 +528,8 @@ TRANSITIONAL = BUSY_STATES - {"ready", "degraded", "orphan", "wedged"}
 # 70 GiB of weights, 91 in all at its share; the Flash FP4-Local lane, 70 GiB of weights and the
 # rest of its share, 97 GiB, in KV cache; and the Ornith 1.5 122B lane, 72.6 GiB of weights at a
 # share of 97 GiB too; and the Qwen3.8 Flash-Next Unsloth GGUF lane, llama.cpp's, 76.9 GiB of weights and a KV cache
-# for its window, 86.6 GiB of GPU memory in all with its draft (88,693 MiB by nvidia-smi on the reference box,
-# 2026-11-12), its n-gram table read from the disk.
+# for each of its two windows, 95.3 GiB of GPU memory in all with its draft (97,552 MiB by nvidia-smi on the reference
+# box, 2026-11-12; 100,881 MiB in its 1M mode), its n-gram table read from the disk.
 ENGINE_UNITS = ("qwen38-sglang.service", "qwen38-flash.service",
                 "qwen38-image.service", "qwen38-video.service", "qwen38-kolibri.service",
                 "qwen38-nemotron.service", "qwen38-nemotron-super.service", "qwen38-flash-local.service",

@@ -237,11 +237,12 @@ class LlamaCppGuard(unittest.TestCase):
                             auth="bearer test-key")
         self.assertEqual(st, 200, out[:120])
         self.assertEqual(Engine.auths[-1], "Bearer test-key")
-        # a wrong key under any spelling stays refused at the door, before the relay
-        st, _ = self.post("/v1/chat/completions",
-                          {"model": SERVED, "messages": [{"role": "user", "content": "hi"}]},
-                          auth="bearer wrong")
-        self.assertEqual(st, 401)
+        # a wrong key under any spelling stays refused at the door, before the relay: the door's own body,
+        # SGLang's, and not the engine's "Invalid API Key"
+        st, out = self.post("/v1/chat/completions",
+                            {"model": SERVED, "messages": [{"role": "user", "content": "hi"}]},
+                            auth="bearer wrong")
+        self.assertEqual((st, out), (401, self.mod.ENGINE_401_BODY))
         self.assertEqual(Engine.generated, ["/v1/chat/completions"], "only the admitted one reached the engine")
 
 
