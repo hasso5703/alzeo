@@ -6,6 +6,7 @@
 <meta name="description" content="The control room of one DGX Spark: one pool of unified memory, the lanes that take turns in it, and the tools that run on them.">
 <meta name="theme-color" content="#170b38">
 <title>Alzeo cockpit</title>
+<script src="/static/js/theme.js"></script>
 <link rel="icon" href="/static/favicon.svg">
 <link rel="stylesheet" href="/static/css/cockpit.css">
 </head>
@@ -672,6 +673,12 @@
             <dt>Usable pool share</dt><dd class="num" id="ck-usable">…</dd>
             <dt>One-prompt ceiling</dt><dd class="num" id="ck-ceiling">…</dd>
             <dt>Refresh</dt><dd class="num" id="ck-periods">…</dd>
+            <dt><label for="theme-select">Theme</label></dt>
+            <dd><select class="input" id="theme-select">
+              <option value="indigo">Deep indigo (default)</option>
+              <option value="graphite">Graphite (dark)</option>
+              <option value="paper">Paper (light)</option>
+            </select></dd>
           </dl>
         </section>
       </div>
