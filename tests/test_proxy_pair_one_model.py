@@ -304,10 +304,12 @@ class TwoBoxesServeOneModel(PairFixture, unittest.TestCase):
         self.mod.unit_slots = lambda: 16
         self.addCleanup(setattr, self.mod, "unit_slots", saved)
         a = self.turns("conv-s16", 2)
+        self.until_running(0)
         st, out, _ = self.call("/v1/chat/completions", a[0])
         self.assertEqual(st, 200, out[:300])
         self.assertIn(b"from spark1", out, "two idle boxes: the entry serves it, no hop")
         held = self.busy(self.E1, self.port1, KEY_1, "local-only", 5, 4.0)
+        self.until_running(5)
         st, out, _ = self.call("/v1/chat/completions", a[1])
         self.assertEqual(st, 200, out[:300])
         self.assertIn(b"from spark1", out, "5 ahead on a lane of 16 moved a conversation off a box with room to spare")
