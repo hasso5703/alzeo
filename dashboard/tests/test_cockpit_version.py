@@ -180,7 +180,9 @@ class TheInstalledRelease(unittest.TestCase):
         out = self.update()
         self.assertEqual((out["installed"], out["clone"], out["behind_clone_why"]), ("v1.36.0", "v1.36.1", "commit"))
         self.assertNotIn("installed_commit", out)
-        self.assertEqual([a for a in argvs if "rev-parse" not in a], [])
+        # but the two reads that say which installer the banner gives (test_a_clone_get_sh_refuses_says_so)
+        self.assertEqual([a for a in argvs if "rev-parse" not in a and "symbolic-ref" not in a
+                          and "origin/main..HEAD" not in a], [])
 
     def test_a_clone_off_the_recorded_commits_history_is_never_said_past_it(self):
         # review, 2026-10-30: a clone reset to an older commit, or whose history was rewritten, still has commits
@@ -203,6 +205,37 @@ class TheInstalledRelease(unittest.TestCase):
         self.assertEqual((out["installed_commit"], out["clone_commit"]), ("eeeeeee", "fffffff"))
         self.assertNotIn("commits", out)
         self.assertNotIn("commits_count", out)
+
+    def test_a_clone_get_sh_refuses_says_so(self):
+        # get.sh updates a clone on main with no commit of its own past origin/main, and refuses any other (a worktree a
+        # developer installs from): the banner that asks for the update gave such a clone get.sh all the same (review
+        # of v1.48.0, 2026-11-13). Its branch and its commits past origin/main, read from git when a banner shows
+        real = self.cp.run
+        self.addCleanup(setattr, self.cp, "run", real)
+        for branch, ahead, local in (("main\n", "0\n", False), ("main\n", "3\n", True), ("fix/v1481\n", "0\n", True),
+                                     ("", "0\n", True)):          # "" : a detached HEAD, which symbolic-ref names not
+            with self.subTest(branch=branch, ahead=ahead):
+                argvs = []
+
+                def git(argv, **k):
+                    argvs.append(argv)
+                    if "rev-parse" in argv:
+                        return HEAD + "\n"
+                    if "symbolic-ref" in argv:
+                        return branch
+                    if "origin/main..HEAD" in argv:
+                        return ahead
+                    return ""
+                self.cp.run = git
+                self.record()
+                out = self.update()
+                self.assertEqual(out.get("clone_local", False), local)
+                self.assertIn(["git", "-C", str(self.cp.REPO_DIR), "rev-list", "--count", "origin/main..HEAD"], argvs)
+                # and no banner, no question
+                self.record(release="v1.36.1", commit=HEAD)
+                argvs.clear()
+                self.assertNotIn("clone_local", self.update())
+                self.assertEqual([a for a in argvs if "rev-parse" not in a], [])
 
     def test_a_recorded_commit_that_is_no_string_never_fails_the_panel(self):
         # load_record checks the schema and the choices, not the commit: a hand edit that leaves a number there

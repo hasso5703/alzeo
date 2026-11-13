@@ -478,6 +478,12 @@ function updateCmd(cfg){
   return (c.terminal_only || {}).update
     || `cd ${c.repo_dir || '~/dgx-spark-qwen38'} && curl -fsSL https://raw.githubusercontent.com/hasso5703/alzeo/main/get.sh | bash`;
 }
+// The installer of this very clone, for one get.sh refuses to update: off main, or with commits of its own past
+// origin/main (a worktree a developer installs from; cockpit.py, release_state's clone_local)
+function localInstallCmd(cfg){
+  const c = cfg || {};
+  return (c.terminal_only || {}).update_stack || `cd ${c.repo_dir || '~/dgx-spark-qwen38'} && ./install.sh`;
+}
 // ./install.sh --recommended through the same one command (get.sh hands install.sh what follows -s --)
 function recommendedCmd(cfg){
   const c = cfg || {};
@@ -1210,16 +1216,20 @@ function renderBanners(state, errors){
     // server names the two commits only for the same release on both sides: it alone decides that case here.
     const same = !!upd.installed_commit, n = upd.commits_count, cs = upd.commits || [];
     const past = n ? `${n === 1 ? 'one commit' : n + ' commits'} past it, at` : 'at';
+    // a clone get.sh refuses to update (off main, or with commits of its own) gets its own installer: get.sh, which the
+    // banner gave it, refused (review of v1.48.0, 2026-11-13)
+    const cmd = upd.clone_local ? localInstallCmd(F.config) : updateCmd(F.config);
     if (why === 'commit') add('orange', same
         ? `The clone moved on since the last install: the services run ${upd.installed} at ${upd.installed_commit}, the clone is ${past} ${upd.clone_commit}.`
         : `The clone moved on since the last install: the services run ${upd.installed}, the clone is ${upd.clone || 'newer'}.`,
-      'A git pull changes the files, not what runs. Run the installer so the services follow it:', updateCmd(F.config),
+      upd.clone_local ? 'This clone is off main or holds commits of its own, which the one-line update refuses to install. Run its installer so the services follow it:'
+        : 'A git pull changes the files, not what runs. Run the installer so the services follow it:', cmd,
       // one commit a line: joined by commas, subjects that hold commas themselves ran into each other (review)
       same && cs.length ? cs.concat(n > cs.length ? [`and ${n - cs.length} more`] : []) : null);
     else if (why === 'no-start') add('orange', 'The last install stopped at --no-start.',
-      'The side lanes, the proxy and the cockpit were not updated with it. Run it again without --no-start:', updateCmd(F.config));
+      'The side lanes, the proxy and the cockpit were not updated with it. Run it again without --no-start:', cmd);
     else add('orange', `No install of v1.36.0 or later recorded what this box runs.`,
-      'The services run a release before it, or one an install that did not end well left. Run the installer once:', updateCmd(F.config));
+      'The services run a release before it, or one an install that did not end well left. Run the installer once:', cmd);
   }
   // This box against what its clone recommends (v1.36.0, 2026-10-17): an orange banner when the
   // next update moves something, so that nobody runs behind in silence. The operator's own

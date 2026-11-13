@@ -125,6 +125,14 @@ def release_state():
            "clone": clone, "behind_clone": bool(lag)}
     if lag:
         out["behind_clone_why"] = lag
+        # get.sh updates a clone on main with no commit of its own past origin/main, and refuses any other ("not
+        # 'main'", "local commits not on origin/main"): the banner that asks for the update gave get.sh to a box
+        # installed from a worktree that holds commits of its own, which it refused (review of v1.48.0, 2026-11-13).
+        # Such a clone is given its own installer. Read only while a banner shows, as git's other reads here.
+        branch = run(["git", "-C", str(REPO_DIR), "symbolic-ref", "-q", "--short", "HEAD"]).strip()
+        ahead = run(["git", "-C", str(REPO_DIR), "rev-list", "--count", "origin/main..HEAD"]).strip()
+        if head and (branch != "main" or (ahead.isdigit() and int(ahead) > 0)):
+            out["clone_local"] = True
     # the same release on both sides said nothing of what moved ("the services run v1.40.4, the clone
     # is v1.40.4", Hasan's capture, 2026-10-29): the two commits, and the clone's past the recorded one
     # when git still knows it. A recorded value that is no hash (or no string) never reaches git's argv. Only

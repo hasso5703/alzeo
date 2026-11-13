@@ -138,6 +138,26 @@ class TheServicesBehindTheirClone(unittest.TestCase):
     def test_services_that_follow_their_clone_get_none(self):
         self.assertEqual(self.banner("{behind_clone: false}"), [])
 
+    def test_a_clone_get_sh_refuses_is_given_its_own_installer(self):
+        # a box installed from a worktree that holds commits of its own: get.sh refuses to update a clone off main or
+        # past origin/main ("refusing to install a stale version"), and the banner gave it get.sh all the same (review
+        # of v1.48.0, 2026-11-13)
+        for why in ("commit", "no-start"):
+            with self.subTest(why=why):
+                b = self.banner("{installed: 'v1.48.0', clone: 'v1.48.0', behind_clone: true, behind_clone_why: '%s', "
+                                "clone_local: true}" % why)
+                self.assertEqual(len(b), 1, b)
+                self.assertIn("cd ~/dgx-spark-qwen38 && ./install.sh", b[0]["text"])
+                self.assertNotIn("get.sh", b[0]["text"])
+        b = self.banner("{installed: 'v1.48.0', clone: 'v1.48.0', behind_clone: true, behind_clone_why: 'commit', "
+                        "clone_local: true}")
+        self.assertIn("This clone is off main or holds commits of its own, which the one-line update refuses to "
+                      "install.", b[0]["text"])
+        self.assertNotIn("A git pull", b[0]["text"])
+        # a clone get.sh updates keeps the one-line update
+        b = self.banner("{installed: 'v1.36.0', clone: 'v1.36.1', behind_clone: true, behind_clone_why: 'commit'}")
+        self.assertIn("get.sh | bash", b[0]["text"])
+
 
 class SettingsListsEachDifference(unittest.TestCase):
     def test_each_one_with_why_it_stays_or_how_to_keep_it_what_moves_first(self):
