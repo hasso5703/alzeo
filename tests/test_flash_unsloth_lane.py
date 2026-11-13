@@ -167,6 +167,17 @@ class TheStagedUnit(unittest.TestCase):
         self.assertIn("--metrics --no-ui", unit)
         self.assertIn("--no-healthcheck", unit)
 
+    def test_its_prompt_cache_in_host_memory_is_capped_in_both_modes(self):
+        """llama-server keeps the prompts it served in host memory (--cache-ram, 8 GiB by default): under GSM8K's eight
+        requests on its two windows it filled it with entries of 1.5 to 5 GiB, its process held 11.9 GiB beside its 95.3
+        GiB of GPU memory, and the box kept 6.0 GiB available at the lowest, 20 at ready (2026-11-13). Capped at 2 GiB
+        (decision 1349), in its native mode and its 1M mode alike."""
+        for mode in ("native", "1m"):
+            with self.subTest(mode=mode):
+                rc, out = self.stage(FLASH_UNSLOTH_CONTEXT=mode)
+                self.assertEqual(rc, 0, out)
+                self.assertRegex(exec_command(self.out.read_text()), r"(?<!\S)--cache-ram 2048(?!\S)")
+
     def test_the_stage_writes_the_gguf_template_with_the_qwen_fixes(self):
         rc, out = self.stage()
         self.assertEqual(rc, 0, out)
@@ -218,8 +229,9 @@ class TheStagedUnit(unittest.TestCase):
         cmd = exec_command(self.out.read_text())
         self.assertIn("--load-mode none --lazy-mode on", cmd)
         self.assertRegex(cmd, r"-c 524288 -np 2\s+-md ")
-        # no window shared, and none of the prompt cache's options that went with it (decisions 1316 to 1318)
-        self.assertFalse({"-kvu", "--cache-ram", "--no-cache-idle-slots"} & set(cmd.split()), cmd)
+        # no window shared, and none of the prompt cache's options that went with it (decisions 1316 to 1318); its cache
+        # in host memory is capped on its own (decision 1349, test_its_prompt_cache_in_host_memory_is_capped_in_both_modes)
+        self.assertFalse({"-kvu", "--no-cache-idle-slots"} & set(cmd.split()), cmd)
         self.assertNotIn("--rope-scaling", cmd)
         self.assertNotRegex(cmd, r"(?<![\w-])-ct[kv](?![\w-])")
         self.assertIn("--spec-type ngram-mod,draft-dflash --spec-draft-n-max 7 --spec-draft-p-min 0.5 "
@@ -333,7 +345,7 @@ class TheWindowChosenAtInstall(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         cmd = exec_command(self.out.read_text())
         self.assertRegex(cmd, self.ONE)
-        self.assertFalse({"-kvu", "--no-cache-idle-slots", "--cache-ram"} & set(cmd.split()), cmd)
+        self.assertFalse({"-kvu", "--no-cache-idle-slots"} & set(cmd.split()), cmd)
         self.assertEqual((self.window(), choice.read_text()), ("1048576", "1m\n"))
         rc, out = self.stage()                                        # a Load: none of the user's environment
         self.assertEqual((rc, self.window()), (0, "1048576"), out)
