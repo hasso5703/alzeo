@@ -5255,8 +5255,7 @@ def unit_texts():
     started with (/proc/<MainPID>/cmdline) and the scripts they name, their comments left out; while it starts (a unit
     activating, a main process that names no model yet), what the unit starts; or None when systemd does not say (no
     unit named, none active, a read that failed, a main process gone or a zombie). Every text lane's unit execs docker
-    run, or (the vLLM lanes, v1.48.1) waits on it in the bash -c that names it: either way its main process's arguments
-    name its model, its checkpoint and its slots, a start under way included. The unit's own
+    run, whose arguments name its model, its checkpoint and its slots, a start under way included. The unit's own
     ExecStart says what its NEXT start runs: switch-model.sh rewrites it and reloads systemd without a restart, and this
     box said the stock checkpoint while its engine served the uncensored one until its next start (found in review,
     2026-11-04; the cockpit asks the engine, cockpit.py, for the same reason). Read again 10 s on at most, by one
