@@ -336,6 +336,8 @@ cd ~/dgx-spark-qwen38 && FLASH_UNSLOTH_CONTEXT=native ./install-flash-unsloth.sh
 
 `--units-only` writes the choice and the lane's unit, and downloads and starts nothing: the next Load of the lane, from
 the cockpit or `./switch-model.sh flash-unsloth`, starts it with the window chosen and sets the clients' limits for it.
+A Load of the lane while it serves without being the boot lane sets those limits alone (`./switch-model.sh flash-unsloth
+--clients`): the boot, and opencode's default model with its compaction, stay with the lane the boot names.
 The choice is kept for the Loads after (a Load from the cockpit stages the unit with none of your environment), in
 `~/.config/qwen38/flash-unsloth-context`, which `--uninstall` removes. An update keeps the window chosen:
 `./install.sh` does not read `FLASH_UNSLOTH_CONTEXT`, and says so.

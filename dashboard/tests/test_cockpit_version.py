@@ -182,7 +182,7 @@ class TheInstalledRelease(unittest.TestCase):
         self.assertNotIn("installed_commit", out)
         # but the two reads that say which installer the banner gives (test_a_clone_get_sh_refuses_says_so)
         self.assertEqual([a for a in argvs if "rev-parse" not in a and "symbolic-ref" not in a
-                          and "origin/main..HEAD" not in a], [])
+                          and "origin/main..HEAD" not in a and "--untracked-files=no" not in a], [])
 
     def test_a_clone_off_the_recorded_commits_history_is_never_said_past_it(self):
         # review, 2026-10-30: a clone reset to an older commit, or whose history was rewritten, still has commits
@@ -212,9 +212,11 @@ class TheInstalledRelease(unittest.TestCase):
         # of v1.48.0, 2026-11-13). Its branch and its commits past origin/main, read from git when a banner shows
         real = self.cp.run
         self.addCleanup(setattr, self.cp, "run", real)
-        for branch, ahead, local in (("main\n", "0\n", False), ("main\n", "3\n", True), ("fix/v1481\n", "0\n", True),
-                                     ("", "0\n", True)):          # "" : a detached HEAD, which symbolic-ref names not
-            with self.subTest(branch=branch, ahead=ahead):
+        # and a tracked file modified, which get.sh refuses too (independent review of v1.48.1)
+        for branch, ahead, edited, local in (("main\n", "0\n", "", False), ("main\n", "3\n", "", True),
+                                             ("fix/v1481\n", "0\n", "", True), ("main\n", "0\n", " M install.sh\n", True),
+                                             ("", "0\n", "", True)):          # "" : a detached HEAD, which symbolic-ref names not
+            with self.subTest(branch=branch, ahead=ahead, edited=edited):
                 argvs = []
 
                 def git(argv, **k):
@@ -225,6 +227,8 @@ class TheInstalledRelease(unittest.TestCase):
                         return branch
                     if "origin/main..HEAD" in argv:
                         return ahead
+                    if "--untracked-files=no" in argv:
+                        return edited
                     return ""
                 self.cp.run = git
                 self.record()

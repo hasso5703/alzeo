@@ -159,7 +159,9 @@ marks and scripts are all served by the box: the page fetches nothing from elsew
   Load can switch to says whether its checkpoint is on disk (whole for what its lane
   serves), begun or not downloaded, and Download fetches it where its lane is installed and built:
   `./switch-model.sh <target> --fetch`, the switch's own fetch (the cache first, resumable,
-  its room checked), which changes nothing else, no unit, no boot, no engine.
+  its room checked), which changes nothing else, no unit, no boot, no engine. The Load of FP4-Local or of the Unsloth
+  GGUF lane while it serves without being the boot lane sets the clients' limits for the window its unit starts with,
+  `./switch-model.sh <target> --clients`, and nothing else: no unit, no boot, and opencode's default model stays.
 
 On a phone the rail is a drawer behind the menu button, controls are 44 px
 targets, and the Agent view opens fullscreen (see "On a phone" below): the whole

@@ -63,6 +63,7 @@ class ClientsOnly(unittest.TestCase):
         for target, (_, _, model, ctx) in LANES.items():
             with self.subTest(target=target):
                 box = self.box(target)
+                base_model, base_compaction = "qwen38/qwen3.8-27b", {"preserve_recent_tokens": 46000, "prune": False}
                 units = {p: p.read_bytes() for p in box.target_unit.parent.iterdir()}
                 rc, out, runs, calls = box.run(target, "--clients")
                 self.assertEqual(rc, 0, out)
@@ -70,6 +71,9 @@ class ClientsOnly(unittest.TestCase):
                     entry = json.loads(c.read_text())["provider"][target]["models"][model]
                     self.assertEqual(entry["limit"], {"context": ctx, "input": ctx, "output": 32000}, c)
                     self.assertTrue(entry["name"].endswith("(local, 1M)"), entry["name"])
+                    # the boot stays on another lane: so do opencode's default model and its compaction, sized for it
+                    doc = json.loads(c.read_text())
+                    self.assertEqual((doc["model"], doc["compaction"]), (base_model, base_compaction), c)
                 self.assertEqual(runs, [], "a docker run: a fetch")
                 self.assertEqual({p: p.read_bytes() for p in box.target_unit.parent.iterdir()}, units, "a unit changed")
                 self.assertEqual([c for c in calls if c.startswith("sudo ")

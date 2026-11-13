@@ -126,9 +126,9 @@ class AStopWhileTheEngineLoads(unittest.TestCase):
                 self.assertNotIn(code, u.success())
 
     def test_the_stop_marks_itself_before_it_stops_the_engine(self):
-        # the mark goes in the unit's own runtime directory, which systemd empties when the unit stops and
-        # again before an automatic restart (RuntimeDirectoryPreserve=no, its default), so that a crash
-        # (after which systemd runs ExecStop too) leaves no mark to the next start
+        # the mark goes in the unit's own runtime directory, which systemd removes when the unit stops, an
+        # automatic restart included (RuntimeDirectoryPreserve=no, its default): no mark outlives a stop into
+        # the next start (after a main process that failed, systemd runs no ExecStop at all: nothing marks it)
         for u in self.units:
             with self.subTest(unit=u.name):
                 self.assertEqual(unit_lines(u.text, "RuntimeDirectory"), [u.name])

@@ -583,6 +583,8 @@ function busyWhy(){
   if (F.job && F.job.current) return `Another action is running (${actionPhrase(F.job.current.action, F.job.current.params)}). Wait for it to finish.`;
   return '';
 }
+// switch-model.sh restarts opencode-web when the config it reads changed, as fit_opencode says of its own rewrite
+const AGENT_RESTART = 'If the Agent server runs and its config changed, it restarts to read it: a reply it is writing then is cut short.';
 const EXPLAIN = {
   unit: p => {
     const lane = laneLabel(p.unit);
@@ -608,8 +610,9 @@ const EXPLAIN = {
   smoke: () => 'One real 200-token generation through the proxy, the way a client uses it.',
   diag_bundle: () => 'Collects logs, state and versions into a tarball in your home; the API key is masked everywhere.',
   fit_opencode: () => 'Reads the KV pool of the engine serving now and rewrites only opencode’s context and output limits, so a conversation can never outgrow it. A dated backup is written first. If the Agent server runs, it restarts to read them: a reply it is writing then is cut short.',
-  clients: p => `switch-model.sh ${p.target} --clients sets opencode, pi and claude-local for the window ${LANE_NAME[TARGET_UNIT(p.target)]}’s unit starts with, `
-    + 'as a switch to it does, and makes it opencode’s default model, with its compaction. It changes nothing else: no fetch, no unit, no boot, no engine.',
+  clients: p => `switch-model.sh ${p.target} --clients sets the limits of opencode, pi and claude-local for the window ${LANE_NAME[TARGET_UNIT(p.target)]}’s unit starts with, `
+    + 'with the lane’s name in opencode. opencode’s default model and its compaction stay with the lane the boot names, and nothing else changes: '
+    + 'no fetch, no unit, no boot, no engine. ' + AGENT_RESTART,
   // what the cap cost and gave on the reference box, and its limits (ops.js, the Machine view)
   gpu_clock: p => gpuCapExplain(p.cap)};
 // the stray revisions the last scan of the checkpoints offered to delete (Library, scanRegistry)
@@ -803,12 +806,13 @@ const SIDE_LANE = {[IMAGE_UNIT]: 'image', [VIDEO_UNIT]: 'video', [KOLIBRI_UNIT]:
 // now sets them first, with the step that sets them at every other Load, and a Load that starts nothing adds nothing.
 const WINDOW_CLIENTS = new Set([FLASH_LOCAL_UNIT, FLASH_UNSLOTH_UNIT]);
 const clientsStep = (unit, target) => ({name: 'switch', params: {target}, title: `Set the clients for ${LANE_NAME[unit]}’s window`,
-  desc: 'Verifies its files and sets opencode, pi and claude-local for the window its unit starts with. Nothing restarts.'});
+  desc: 'Verifies its files and sets opencode, pi and claude-local for the window its unit starts with. The lane does not restart. ' + AGENT_RESTART});
 // The same clients for a lane that serves without being the boot lane, whose switch would point the boot at it: the
 // clients alone (switch-model.sh --clients). The Load of an update to it set none, and a window chosen with
 // --units-only reached the engine at its restart and not the clients (review of v1.48.0, 2026-11-13).
 const clientsOnlyStep = (unit, target) => ({name: 'clients', params: {target}, title: `Set the clients for ${LANE_NAME[unit]}’s window`,
-  desc: 'Sets opencode, pi and claude-local for the window its unit starts with, and nothing else: the boot stays where it is. Nothing restarts.'});
+  desc: 'Sets the limits of opencode, pi and claude-local, and the lane’s name in opencode, for the window its unit starts with; the boot and '
+    + 'opencode’s default model stay where they are, and the lane does not restart. ' + AGENT_RESTART});
 function laneJourneySteps(target){
   const unit = TARGET_UNIT(target);
   const steps = [];

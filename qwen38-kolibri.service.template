@@ -59,7 +59,9 @@ Restart=always
 # reference box, 2026-11-13). The stop marks itself first, in the unit's runtime directory (systemd
 # removes it each time the unit stops, a restart of its own included), and ExecStart, which waits
 # on docker run where it exec'ed it, exits 143 for a stop it was asked, whatever the engine's code,
-# else with docker run's: a crash stays a failure, started again.
+# else with docker run's: a crash stays a failure, started again. Not covered: a stop during
+# ExecStartPre, before the engine starts (systemd ends the preflight with SIGTERM and runs no ExecStop):
+# that one ends failed, as before (independent review of v1.48.1).
 SuccessExitStatus=137 143
 RuntimeDirectory=qwen38-kolibri
 RestartSec=15

@@ -136,6 +136,22 @@ def main() -> None:
     assert r.returncode == 2, r.returncode
     assert "Traceback" not in r.stderr, r.stderr
 
+    # 8. --name-only (switch-model.sh --clients, v1.48.1): the served entry's name follows the window, and nothing
+    # else moves: the default and small models stay on the lane the boot names, every other byte as it was.
+    doc = stale_fp8_config()
+    p = write(tmp, doc)
+    rc, out = run("--name-only", p, "flash", "flash", "1048576")
+    assert rc == 0, out
+    after = read(p)
+    assert after["provider"]["flashnext"]["models"]["qwen3.8-flash-next"]["name"].endswith("(local, 1M)"), after
+    after["provider"]["flashnext"]["models"]["qwen3.8-flash-next"]["name"] = \
+        doc["provider"]["flashnext"]["models"]["qwen3.8-flash-next"]["name"]
+    assert after == doc, after
+    p = write(tmp, doc)
+    rc, out = run("--name-only", p, "27b", "stock", "1010000")
+    assert rc == 0, out
+    assert (read(p)["model"], read(p)["small_model"]) == (doc["model"], doc["small_model"]), read(p)
+
     print("test_oc_point_default: OK")
 
 

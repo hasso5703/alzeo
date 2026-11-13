@@ -226,7 +226,9 @@ cd ~/dgx-spark-qwen38 && FLASH_LOCAL_CONTEXT=native ./install-flash-local.sh --u
 
 `--units-only` writes the choice and the lane's unit, and downloads and starts nothing: the next Load
 of the lane, from the cockpit or `./switch-model.sh flash-local`, starts it with the window chosen and
-sets the clients' limits for it. An update keeps the window chosen: `./install.sh` does not read
+sets the clients' limits for it. A Load of the lane while it serves without being the boot lane (started by hand, say)
+sets those limits alone, `./switch-model.sh flash-local --clients`: the boot, and opencode's default model with its
+compaction, stay with the lane the boot names. An update keeps the window chosen: `./install.sh` does not read
 `FLASH_LOCAL_CONTEXT`, and says so.
 
 The choice is kept for the Loads after (a Load from the cockpit stages the unit with none of your

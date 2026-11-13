@@ -604,6 +604,13 @@ if [ "$CHOICE" = "flash-local" ]; then
         # and a Load to 1M kept 205,000 under a compaction block sized for 840,000 (second review of v1.45.2)
         python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" flash-local qwen3.8-flash-next-fp4 "$FLL_CTX" "$FLL_OUT" >/dev/null \
           || echo "NOTE: could not update the Qwen3.8 Flash-Next FP4-Local limits in $OC_JSON; check them by hand ($FLL_PAIR)"
+        # --clients: the limits and the entry's name for its window, alone. The boot stays on another lane, and so do
+        # opencode's default model and its compaction, sized for the lane it boots with (independent review of v1.48.1)
+        if [ "${CLIENTS_ONLY:-0}" -eq 1 ]; then
+          python3 "$REPO_DIR/oc-point-default.py" --name-only "$OC_JSON" flash-local flash-local "${FLL_WINDOW:-262144}" \
+            || echo "NOTE: could not update $OC_JSON (hand-edited?); the FP4-Local entry keeps its name"
+          continue
+        fi
         python3 "$REPO_DIR/oc-point-default.py" "$OC_JSON" flash-local flash-local "${FLL_WINDOW:-262144}" \
           || echo "NOTE: could not update $OC_JSON (hand-edited?); set its \"model\" field yourself"
         [ -n "$FLL_KEEP" ] && { python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" --compaction "$FLL_KEEP" \
@@ -862,6 +869,12 @@ if [ "$CHOICE" = "flash-unsloth" ]; then
         # (the FP4-Local lane's rule, second review of v1.45.2)
         python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" flash-unsloth qwen3.8-flash-next-unsloth "$FLU_CTX" "$FLU_OUT" >/dev/null \
           || echo "NOTE: could not update the Qwen3.8 Flash-Next Unsloth GGUF limits in $OC_JSON; check them by hand ($FLU_PAIR)"
+        # --clients: the limits and the entry's name for its window, alone, as for FP4-Local
+        if [ "${CLIENTS_ONLY:-0}" -eq 1 ]; then
+          python3 "$REPO_DIR/oc-point-default.py" --name-only "$OC_JSON" flash-unsloth flash-unsloth "${FLU_WINDOW:-262144}" \
+            || echo "NOTE: could not update $OC_JSON (hand-edited?); the Unsloth GGUF entry keeps its name"
+          continue
+        fi
         python3 "$REPO_DIR/oc-point-default.py" "$OC_JSON" flash-unsloth flash-unsloth "${FLU_WINDOW:-262144}" \
           || echo "NOTE: could not update $OC_JSON (hand-edited?); set its \"model\" field yourself"
         [ -n "$FLU_KEEP" ] && { python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" --compaction "$FLU_KEEP" \

@@ -24,6 +24,10 @@ and any other default model was replaced (found in review, 2026-09-24).
 Usage: oc-point-default.py --label <choice> <window> prints the served entry's name,
 for install.sh's generator to write the same one.
 
+Usage: oc-point-default.py --name-only <config.json> <lane> <choice> <window> sets the
+served entry's name alone, "model" and "small_model" left as they are: switch-model.sh
+--clients, for a lane that serves while the boot names another (v1.48.1).
+
 Exit 0 on success and on a missing provider (nothing to point at); exit 1 when the edit
 could not be written; exit 2 on usage errors, exit 3 when the file is not usable JSON(C).
 """
@@ -88,10 +92,11 @@ def main() -> None:
     if len(sys.argv) == 4 and sys.argv[1] == "--label":
         print(label_for(sys.argv[2], sys.argv[3]) or "")
         return
-    if len(sys.argv) != 5:
+    name_only = len(sys.argv) == 6 and sys.argv[1] == "--name-only"
+    if len(sys.argv) != 5 and not name_only:
         print(__doc__.strip(), file=sys.stderr)
         sys.exit(2)
-    path, lane, choice, window = sys.argv[1:5]
+    path, lane, choice, window = sys.argv[2:6] if name_only else sys.argv[1:5]
     want = {"flash": "flashnext/qwen3.8-flash-next", "kolibri": "kolibri/kolibri-1",
             "nemotron": "nemotron/nemotron-3.5-bolt",
             "nemotron-super": "nemotron-super/nemotron-3.5-super-vl",
@@ -114,7 +119,7 @@ def main() -> None:
     new = copy.deepcopy(cfg)
     new_text = text
     kept = []
-    for key in ("model", "small_model"):
+    for key in () if name_only else ("model", "small_model"):
         cur = cfg.get(key)
         if cur == want:
             continue
@@ -135,8 +140,8 @@ def main() -> None:
             new_text = ocm.set_member(new_text, ["provider", prov, "models", mid], "name", json.dumps(name))
     moved = cfg.get("model") != new.get("model") or cfg.get("small_model") != new.get("small_model")
     if new_text == text:
-        print(f"opencode default model {'left as it is' if kept else 'already ' + want} "
-              f"({path}){shown}: unchanged")
+        print(f"opencode entry {want} ({path}){shown}: unchanged" if name_only else
+              f"opencode default model {'left as it is' if kept else 'already ' + want} ({path}){shown}: unchanged")
     else:
         saved, bad = ocm.commit(path, new_text, new)
         if bad:
