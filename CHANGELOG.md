@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.48.1 (2026-11-14): three themes for the cockpit, by x42en, and a vLLM lane stopped while it loads ends stopped
+
+**Three themes for the cockpit (pull request #71, by x42en).** The cockpit draws every color from role tokens (`--surface`,
+`--primary-bg`, `--nav-active-bg` and the others) that a theme fills, chosen by one `data-theme` attribute on the page:
+Deep Indigo (the cockpit as it was, and the default), Graphite (dark) and Paper (light), picked in the Cockpit panel of
+the settings and kept by the browser. Its JavaScript was read line by line before it ran on the reference box: no network call, no `eval` nor
+`innerHTML`, a stored theme taken only when it names one of the three. Deep Indigo resolves, property by property, to
+what main drew (1,956 properties there, 1,959 here: 21 spellings of the same value, and the one new rule, the "coming
+soon" chip, drawn in main's own colors). The three themes were captured on the five views and the login page at a desk's size, and
+Graphite and Paper on a phone: no JavaScript error, the theme kept across a reload, the login page's key field untouched. x42en's five commits keep their
+author. Thanks to x42en.
+
+**A vLLM lane stopped while its engine loads ends stopped, not failed.** `systemctl stop qwen38-flash-local` 16 s into a
+start (2026-11-13): docker stopped the container with SIGTERM, vLLM turned it into `KeyboardInterrupt("terminated")` while
+it initialized and exited 1, outside the units' `SuccessExitStatus=137 143`: "Failed with result 'exit-code'" for a plain
+stop, a red card in the cockpit. The five vLLM units (FP4-Local, Ornith, Kolibri, both Nemotrons) now mark a stop in their
+runtime directory before `docker stop`, and their `ExecStart` waits on `docker run` instead of exec'ing it: 143 for a stop
+it was asked, `docker run`'s own code otherwise, so a crash stays a failure that `Restart=` starts again, and FP4-Local's 78
+(its files missing) keeps its meaning. systemd removes the directory each time the unit stops, an automatic restart
+included. Not covered: a stop during the preflight before the engine starts (`ExecStartPre`), which ends failed as before.
+The SGLang and llama.cpp lanes are left as they are: their journals since 2026-09-01 hold no stop that ended failed.
+
+**The Load of a window lane that serves without being the boot lane sets its clients' limits.** FP4-Local and the Unsloth
+GGUF lane let a window be chosen (`FLASH_LOCAL_CONTEXT`, `FLASH_UNSLOTH_CONTEXT`), and an update that rewrote the unit of
+such a lane while it served without being the boot lane left its Load a restart alone: the clients kept the other window's
+pair. That Load now runs `./switch-model.sh <lane> --clients` first: the lane's limits in opencode (and so in pi and
+`claude-local`) and its entry's name, for the window its unit starts with, and nothing else: no unit, no boot, and
+opencode's default model with its compaction stay with the lane the boot names. If the Agent server runs and its config
+changed, it restarts to read it, which the step now says (the Load's other clients step said "Nothing restarts." too).
+
+**The update banner gives a clone that get.sh refuses its own installer.** A box installed from a clone that is not on
+`main`, holds commits of its own past `origin/main`, or has a tracked file modified is one get.sh refuses to update: its
+banner now gives `cd <clone> && ./install.sh`.
+
+**Two tests of the pair that depended on timing.** `test_boxes_far_apart_share_even_a_conversation` failed once on
+GitHub's runners (a request still counted when the next turn was weighed); it and its neighbour now wait until the box
+says it runs the requests they set. Four mutants of the pair's decision still fail them.
+
+**What an update does.** The five vLLM units are written again: one that serves keeps running, its card says an update is
+owed, and its next Load restarts it on the new unit. The cockpit restarts. The proxy is unchanged and does not.
+
 ## v1.48.0 (2026-11-13): a tenth lane, the first on llama.cpp: Qwen3.8 Flash-Next in Unsloth's GGUF, with n-grams and a DFlash2 draft
 
 **The lane.** `install-flash-unsloth.sh` serves Unsloth's dynamic 4-bit GGUF of Qwen3.8-Flash-Next
