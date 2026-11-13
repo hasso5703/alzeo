@@ -516,6 +516,7 @@ const ACTION_PHRASE = {
   fit_opencode: () => 'fit the opencode limits to this engine',
   delete_strays: () => 'delete the stray revisions from the model caches',
   fetch: p => `download the checkpoint of ${TARGET_NAME[p.target] || p.target || 'a target'}`,
+  clients: p => `set the clients for the window of ${TARGET_NAME[p.target] || p.target || 'a lane'}`,
   prepare: p => `build the runtime of the ${laneOfTarget(p.target) || ''} lane`,
   gpu_clock: p => p.cap === 'none' ? 'lift the GPU clock cap' : `cap the GPU clock at ${gpuCapName(p.cap)}`};
 function actionPhrase(action, params){
@@ -601,6 +602,8 @@ const EXPLAIN = {
   smoke: () => 'One real 200-token generation through the proxy, the way a client uses it.',
   diag_bundle: () => 'Collects logs, state and versions into a tarball in your home; the API key is masked everywhere.',
   fit_opencode: () => 'Reads the KV pool of the engine serving now and rewrites only opencode’s context and output limits, so a conversation can never outgrow it. A dated backup is written first. If the Agent server runs, it restarts to read them: a reply it is writing then is cut short.',
+  clients: p => `switch-model.sh ${p.target} --clients sets opencode, pi and claude-local for the window ${LANE_NAME[TARGET_UNIT(p.target)]}’s unit starts with, `
+    + 'as a switch to it does, and makes it opencode’s default model, with its compaction. It changes nothing else: no fetch, no unit, no boot, no engine.',
   // what the cap cost and gave on the reference box, and its limits (ops.js, the Machine view)
   gpu_clock: p => gpuCapExplain(p.cap)};
 // the stray revisions the last scan of the checkpoints offered to delete (Library, scanRegistry)
@@ -626,17 +629,19 @@ const TITLE = {unit: p => `${cap1(p.verb)} ${laneLabel(p.unit)}`, switch: p => `
   diag_bundle: () => 'Write a diagnostics bundle', fit_opencode: () => 'Fit the opencode limits',
   delete_strays: () => 'Delete the stray revisions',
   fetch: p => `Download ${TARGET_NAME[p.target] || p.target}`,
+  clients: p => `Set the clients for the window of ${TARGET_NAME[p.target] || p.target}`,
   prepare: p => `Build the ${laneOfTarget(p.target)} lane's runtime`,
   gpu_clock: p => p.cap === 'none' ? 'Lift the GPU clock cap' : `Cap the GPU clock at ${gpuCapName(p.cap)}`};
 const VERB = {unit: p => cap1(p.verb) + ' ' + (LANE_NAME[p.unit] || laneLabel(p.unit)), switch: () => 'Point the boot', flush_cache: () => 'Flush',
   abort_all: () => 'Abort all', smoke: () => 'Run the probe', diag_bundle: () => 'Write the bundle', fit_opencode: () => 'Fit the limits',
-  delete_strays: () => 'Delete them', fetch: () => 'Download', prepare: () => 'Build it',
+  delete_strays: () => 'Delete them', fetch: () => 'Download', clients: () => 'Set the clients', prepare: () => 'Build it',
   gpu_clock: p => p.cap === 'none' ? 'Lift the cap' : `Cap at ${gpuCapName(p.cap)}`};
 // the GPU clock cap runs as a python job on the server, which hands the page each cap's exact command (its
 // config); the sheet shows that command, not the job's name, unless this machine has no nvidia-smi (ops.js, GC),
 // where None runs nothing and only forgets the cap kept
 const argvFor = (name, p) => name === 'unit' ? ['sudo', '-n', '/usr/bin/systemctl', p.verb, p.unit]
   : name === 'switch' ? ['bash', 'switch-model.sh', p.target] : name === 'fetch' ? ['bash', 'switch-model.sh', p.target, '--fetch']
+  : name === 'clients' ? ['bash', 'switch-model.sh', p.target, '--clients']
   : name === 'prepare' ? ['bash', 'prepare-lane.sh', laneOfTarget(p.target)].concat(['flash', '27b'].includes(laneOfTarget(p.target)) ? [p.target] : [])
   : name === 'gpu_clock' && GC.has !== false && ((F.config || {}).gpu_clock_argv || {})[p.cap] ? F.config.gpu_clock_argv[p.cap]
   : ['cockpit', name];
@@ -793,6 +798,11 @@ const SIDE_LANE = {[IMAGE_UNIT]: 'image', [VIDEO_UNIT]: 'video', [KOLIBRI_UNIT]:
 const WINDOW_CLIENTS = new Set([FLASH_LOCAL_UNIT, FLASH_UNSLOTH_UNIT]);
 const clientsStep = (unit, target) => ({name: 'switch', params: {target}, title: `Set the clients for ${LANE_NAME[unit]}’s window`,
   desc: 'Verifies its files and sets opencode, pi and claude-local for the window its unit starts with. Nothing restarts.'});
+// The same clients for a lane that serves without being the boot lane, whose switch would point the boot at it: the
+// clients alone (switch-model.sh --clients). The Load of an update to it set none, and a window chosen with
+// --units-only reached the engine at its restart and not the clients (review of v1.48.0, 2026-11-13).
+const clientsOnlyStep = (unit, target) => ({name: 'clients', params: {target}, title: `Set the clients for ${LANE_NAME[unit]}’s window`,
+  desc: 'Sets opencode, pi and claude-local for the window its unit starts with, and nothing else: the boot stays where it is. Nothing restarts.'});
 function laneJourneySteps(target){
   const unit = TARGET_UNIT(target);
   const steps = [];
@@ -807,7 +817,7 @@ function laneJourneySteps(target){
   // asked for (found in review, 2026-10-17). The lane's card asks the same of it (lanes.js).
   const sv0 = servingEngine();
   if (sv0 && sv0[0] === unit && laneTarget(unit) === target && updateOwed(unit))
-    return steps.concat(WINDOW_CLIENTS.has(unit) && bootUnit() === unit ? [clientsStep(unit, target)] : [],
+    return steps.concat(!WINDOW_CLIENTS.has(unit) ? [] : bootUnit() === unit ? [clientsStep(unit, target)] : [clientsOnlyStep(unit, target)],
                         [{name: 'unit', params: {verb: 'restart', unit}, title: `Restart ${LANE_NAME[unit]} on what the update installed`,
              desc: `It answers again in ${readyIn(unit)}.` + (unit === IMAGE_UNIT || unit === VIDEO_UNIT ? ' A generation in flight is lost.' : '')}]);
   const serving = servingEngine();

@@ -230,6 +230,8 @@ def job_phrase(action: str, params: dict) -> str:
         return "delete the stray revisions from the model caches"
     if action == "fetch":
         return f"download the {p.get('target', '')} checkpoint"
+    if action == "clients":
+        return f"set the clients for {p.get('target', '')}'s window"
     if action == "prepare":
         t = p.get("target", "")
         lane = target_lane(t) if t else ""
@@ -3686,6 +3688,16 @@ ACTIONS["fetch"] = {
     "params": {"target": ACTIONS["switch"]["params"]["target"]},
     "argv": lambda p: ["bash", str(REPO_DIR / "switch-model.sh"), p["target"], "--fetch"],
     "timeout": 7200,
+}
+# The clients of a lane that follow its unit's window (switch-model.sh <target> --clients: opencode, and through its
+# config pi and claude-local), set for the window of its unit in place and nothing else. The Load of such a lane that
+# serves without being the boot lane, with an update owed to it, sets them before its restart, where its switch would
+# have pointed the boot at it (base.js, laneJourneySteps; review of v1.48.0, 2026-11-13).
+ACTIONS["clients"] = {
+    "danger": "low",
+    "params": {"target": ["flash-local", "flash-unsloth"]},
+    "argv": lambda p: ["bash", str(REPO_DIR / "switch-model.sh"), p["target"], "--clients"],
+    "timeout": 300,
 }
 # Every lane but the one that serves is installed on demand: its units at install, its runtime
 # at its first Load, built as the user (no sudo) by prepare-lane.sh, which takes the lane as an

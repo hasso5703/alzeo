@@ -249,6 +249,19 @@ class ItsUnit(Base):
         argv = self.ck.ACTIONS["prepare"]["argv"]({"target": "flash-local"})
         self.assertEqual(argv[-1], "flash-local")
 
+    def test_its_clients_and_the_unsloth_lanes_are_set_alone_by_an_action_of_their_own(self):
+        # the Load of such a lane that serves without being the boot lane sets its clients with it before the restart,
+        # where a switch would point the boot at it (base.js, laneJourneySteps): the two lanes whose clients follow
+        # their unit's window, and no other target
+        self.assertEqual(self.ck.ACTIONS["clients"]["params"], {"target": ["flash-local", "flash-unsloth"]})
+        for t in ("flash-local", "flash-unsloth"):
+            self.assertEqual(self.ck.ACTIONS["clients"]["argv"]({"target": t}),
+                             ["bash", str(REPO / "switch-model.sh"), t, "--clients"])
+        code, body = self.ck.start_action("clients", {"target": "kolibri"})
+        self.assertEqual((code, body), (400, {"error": "invalid target"}))
+        self.assertEqual(self.ck.job_phrase("clients", {"target": "flash-local"}),
+                         "set the clients for flash-local's window")
+
     def test_the_flash_lanes_prefix_does_not_take_it(self):
         # "flash-local".startswith("flash"): read by prefix, its Load prepared and switched the
         # SGLang flash lane

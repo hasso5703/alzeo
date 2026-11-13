@@ -2136,6 +2136,27 @@ class TheLoadOfABootLaneSetsTheClientsForItsWindow(unittest.TestCase):
         self.assertEqual([s for s, _ in self.steps("qwen38-kolibri.service", "kolibri", "inactive", "stopped")],
                          ["unit:start qwen38-kolibri.service"])
 
+    def test_serving_without_being_the_boot_lane_its_clients_are_set_and_the_boot_stays(self):
+        # the Load of an update never points the boot at the lane (2026-10-17), and so it set no client: a window
+        # chosen with --units-only reached the engine at the restart, and opencode, pi and claude-local kept the old
+        # pair (review of v1.48.0, 2026-11-13). switch-model.sh --clients sets them alone.
+        for unit, target, name in self.LANES:
+            with self.subTest(target=target):
+                r = run(self, r"""
+                const U = JSON.parse(JSON.stringify(UNITS));
+                U.units['@U@'] = {active: 'active', enabled: 'disabled'};
+                feed({units: U, lanes_ready: {'@T@': true}, lanes_startable: {'@T@': true},
+                      lifecycle: life({'qwen38-sglang.service': eng('stopped'), '@U@': eng('ready', {target: '@T@'})}),
+                      update: {stale_engines: {'@U@': 'Its unit changed (what it runs and how)'}}});
+                report({boot: bootUnit(), steps: laneJourneySteps('@T@').map(s => [s.name + (s.params.verb ? ':' + s.params.verb + ' ' + s.params.unit : ''),
+                                                                                    s.title, argvFor(s.name, s.params).join(' ')])});
+                """.replace("@U@", unit).replace("@T@", target))
+                self.assertEqual(r["boot"], "qwen38-sglang.service")
+                self.assertEqual([s[0] for s in r["steps"]], ["clients", "unit:restart " + unit])
+                self.assertEqual(r["steps"][0][1:], [f"Set the clients for {name}’s window",
+                                                     f"bash switch-model.sh {target} --clients"])
+                self.assertEqual(r["steps"][1][1], f"Restart {name} on what the update installed")
+
 
 class TheLastFiveMinutesSayTheEnginesCounters(unittest.TestCase):
     """The Traffic view's last 5 minutes come from the engine's own counters, which the

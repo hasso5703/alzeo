@@ -19,6 +19,7 @@
 #   ./switch-model.sh ornith-122b     # ornith-ai/Ornith-1.5-122B-NVFP4, Ornith AI's mixture of experts (vLLM + b12x)
 #   ./switch-model.sh flash-unsloth   # unsloth/Qwen3.8-Flash-Next-GGUF, Unsloth's GGUF of the flash model (llama.cpp)
 #   ./switch-model.sh <target> --fetch  # that target's checkpoint only, into the cache; nothing else changes
+#   ./switch-model.sh <flash-local|flash-unsloth> --clients  # that lane's clients for its unit's window; nothing else
 #
 # Within the 27B lane (stock, uncensored, fp8, uncensored-fp8) it does what it
 # always did:
@@ -58,15 +59,24 @@ _ENV_HF_CACHE="${HF_CACHE:-}"      # before the pins below give it install.sh's 
 # 27B lane and restarting what follows it, where the usage was all anyone wanted (found
 # in review, 2026-09-24). MODEL_CHOICE= still names one, as install.sh takes it.
 CHOICE="${1:-${MODEL_CHOICE:-}}"
-case "$CHOICE" in stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|ornith-122b|flash-unsloth) ;; *) printf 'usage: ./switch-model.sh <stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|ornith-122b|flash-unsloth> [--fetch]\n' >&2; [ -z "$CHOICE" ] && exit 2; die "unknown target: $CHOICE" ;; esac
+case "$CHOICE" in stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|ornith-122b|flash-unsloth) ;; *) printf 'usage: ./switch-model.sh <stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|ornith-122b|flash-unsloth> [--fetch]\n       ./switch-model.sh <flash-local|flash-unsloth> --clients\n' >&2; [ -z "$CHOICE" ] && exit 2; die "unknown target: $CHOICE" ;; esac
 # --fetch: the target's checkpoint only, fetched as a switch fetches it (the cache first,
 # resumable, its room checked), and nothing else: no unit, no boot, no engine, no record.
 # Library's Download runs it, and a lane installed without its weights gets them so.
-FETCH_ONLY=0
+# --clients: the clients of a lane that follow its unit's window (FLASH_LOCAL_CONTEXT, FLASH_UNSLOTH_CONTEXT): opencode,
+# and through its config pi and claude-local, set for the window its installed unit starts with, as a switch to it sets
+# them, and nothing else: no fetch, no unit, no boot, no engine, no record. The cockpit's Load of such a lane that serves
+# without being the boot lane, with an update owed to it, runs it before the restart: a switch would have pointed the boot
+# at it, which no update asks for, and a window chosen with --units-only reached the engine and not the clients (review
+# of v1.48.0, 2026-11-13).
+FETCH_ONLY=0; CLIENTS_ONLY=0
 case "${2:-}" in
   "") ;;
   --fetch) FETCH_ONLY=1 ;;
-  *) die "unknown option: $2 (the one option is --fetch)" ;;
+  --clients)
+    case "$CHOICE" in flash-local|flash-unsloth) CLIENTS_ONLY=1 ;;
+      *) die "--clients is for flash-local and flash-unsloth, the lanes whose clients follow their unit's window" ;; esac ;;
+  *) die "unknown option: $2 (the options are --fetch, and --clients for flash-local and flash-unsloth)" ;;
 esac
 fetched(){  # $1 what: in --fetch mode the checkpoint is in the cache, and the run ends here
   [ "$FETCH_ONLY" -eq 1 ] || return 0
@@ -112,7 +122,7 @@ dl_free_gb(){ { df -BG --output=avail "$(existing "${1:-$HF_CACHE}")" 2>/dev/nul
 [ "$(box_mem_class)" != 64 ] || target_fits "$CHOICE" || die "The $CHOICE target needs a 128 GB DGX Spark, and this box is a 64 GB one."
 # A terminal opened before the account joined the docker group: the run goes on with it (lanes.sh).
 docker_session bash "$REPO_DIR/${BASH_SOURCE[0]##*/}" "$@"
-[ "$FETCH_ONLY" -eq 1 ] || text_lane_migrate
+[ "$FETCH_ONLY" -eq 1 ] || [ "$CLIENTS_ONLY" -eq 1 ] || text_lane_migrate
 
 # ── The Kolibri lane: a text lane on vLLM, switched to the way the image lane is ────
 # For the proxy and its clients Kolibri is a text lane like the 27B and the flash: the same
@@ -489,81 +499,84 @@ FLASH_LOCAL_UNIT_NAME="qwen38-flash-local.service"
 FLL_STAGE="$CONFIG_DIR/qwen38-flash-local.service.switch-stage"
 if [ "$CHOICE" = "flash-local" ]; then
   [ -f "$FLASH_LOCAL_UNIT" ] || die "the Qwen3.8 Flash-Next FP4-Local lane is not installed on this box (no $FLASH_LOCAL_UNIT). Install it once: ./install.sh --with-flash-local (about 121 GB)"
-  # The checkpoint, its pinned revision, the image and the size, from the lane's installer, the one
-  # place they are declared.
-  eval "$(grep -E '^FLASH_LOCAL_(REPO|REV|IMAGE|GB)=' "$REPO_DIR/install-flash-local.sh" || true)"
-  for _v in FLASH_LOCAL_REPO FLASH_LOCAL_REV FLASH_LOCAL_IMAGE FLASH_LOCAL_GB; do
-    eval "[ -n \"\${$_v:-}\" ]" || die "install-flash-local.sh no longer defines $_v (repo layout changed?)"
-  done
-  unset _v
-  docker image inspect "$FLASH_LOCAL_IMAGE" >/dev/null 2>&1 \
-    || die "the Qwen3.8 Flash-Next FP4-Local lane's image (${FLASH_LOCAL_IMAGE:0:40}...) is missing: ./prepare-lane.sh flash-local pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
-  FLL_HF="$(unit_hf_cache "$FLASH_LOCAL_UNIT")"
-  FLL_HF="${FLL_HF:-$HF_CACHE}"
-  # the room its table's copies need on their disk, before the download (install-flash-local.sh)
-  HF_CACHE="$FLL_HF" bash "$REPO_DIR/install-flash-local.sh" --room || exit 1
-  printf '\n\033[1;36m── Verifying %s @ %s in the cache (resumable)\033[0m\n' "$FLASH_LOCAL_REPO" "${FLASH_LOCAL_REV:0:12}"
-  FLL_TOKEN_ARGS=()
-  # by name: docker takes the value from its own environment, so the token is in no argv
-  if [ -n "${HF_TOKEN:-}" ]; then export HF_TOKEN; FLL_TOKEN_ARGS=(-e HF_TOKEN); fi
-  FLL_PROGRESS_ARGS=()
-  if [ -f "$REPO_DIR/hf-progress.py" ]; then
-    FLL_PROGRESS_ARGS=(-v "$REPO_DIR/hf-progress.py:/opt/qwen38/hf-progress.py:ro")
-  fi
-  # In the lane's own image, as the other vLLM lanes fetch theirs; --init so that a cockpit job
-  # stopped past its timeout stops this too. ckpt-fetch.py is the one fetch of every lane's
-  # checkpoint (it says why).
-  docker run --rm --init --network host --user "$(id -u):$(id -g)" --entrypoint python3 \
-    -e HF_HOME=/hf -e HF_HUB_DOWNLOAD_TIMEOUT=30 -e HF_HUB_DISABLE_XET=1 \
-    -e HF_HUB_DISABLE_PROGRESS_BARS="$DL_NO_BARS" \
-    "${FLL_TOKEN_ARGS[@]}" "${FLL_PROGRESS_ARGS[@]}" \
-    -v "$REPO_DIR/ckpt-fetch.py:/opt/qwen38/ckpt-fetch.py:ro" \
-    -v "$FLL_HF":/hf "$FLASH_LOCAL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_REV" --offline-first \
-    --need-gb "$FLASH_LOCAL_GB" --free-gb "$(dl_free_gb "$FLL_HF")" \
-    || die "the Qwen3.8 Flash-Next FP4-Local checkpoint could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
-  fetched "$FLASH_LOCAL_REPO @ ${FLASH_LOCAL_REV:0:12}"
-  # its chat template, its n-gram table where the engine reads it, and its unit for this checkpoint
-  HF_CACHE="$FLL_HF" bash "$REPO_DIR/install-flash-local.sh" --stage "$FLL_STAGE" \
-    || { rm -f "$FLL_STAGE"; die "the Qwen3.8 Flash-Next FP4-Local unit could not be prepared (the lines above say why)"; }
-  FLL_REWRITTEN=""
-  if ! cmp -s "$FLL_STAGE" "$FLASH_LOCAL_UNIT"; then
-    diff "$FLL_STAGE" "$FLASH_LOCAL_UNIT" || true   # show exactly what changes
-    sudo install -m 644 "$FLL_STAGE" "$FLASH_LOCAL_UNIT"
-    FLL_REWRITTEN=1
-  fi
-  rm -f "$FLL_STAGE"
-  # Which lane this box served at boot, written down before it is disabled: removing this lane
-  # later gives the boot back to it (its installer's --uninstall).
-  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service; do
-    if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
-      text_lane_note "$TEXT_UNIT_NAME"; break   # both enabled: the 27B, as install.sh follows it
+  # the fetch, the unit and the boot: --clients goes straight to the clients, for the unit in place
+  if [ "$CLIENTS_ONLY" -eq 0 ]; then
+    # The checkpoint, its pinned revision, the image and the size, from the lane's installer, the one
+    # place they are declared.
+    eval "$(grep -E '^FLASH_LOCAL_(REPO|REV|IMAGE|GB)=' "$REPO_DIR/install-flash-local.sh" || true)"
+    for _v in FLASH_LOCAL_REPO FLASH_LOCAL_REV FLASH_LOCAL_IMAGE FLASH_LOCAL_GB; do
+      eval "[ -n \"\${$_v:-}\" ]" || die "install-flash-local.sh no longer defines $_v (repo layout changed?)"
+    done
+    unset _v
+    docker image inspect "$FLASH_LOCAL_IMAGE" >/dev/null 2>&1 \
+      || die "the Qwen3.8 Flash-Next FP4-Local lane's image (${FLASH_LOCAL_IMAGE:0:40}...) is missing: ./prepare-lane.sh flash-local pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
+    FLL_HF="$(unit_hf_cache "$FLASH_LOCAL_UNIT")"
+    FLL_HF="${FLL_HF:-$HF_CACHE}"
+    # the room its table's copies need on their disk, before the download (install-flash-local.sh)
+    HF_CACHE="$FLL_HF" bash "$REPO_DIR/install-flash-local.sh" --room || exit 1
+    printf '\n\033[1;36m── Verifying %s @ %s in the cache (resumable)\033[0m\n' "$FLASH_LOCAL_REPO" "${FLASH_LOCAL_REV:0:12}"
+    FLL_TOKEN_ARGS=()
+    # by name: docker takes the value from its own environment, so the token is in no argv
+    if [ -n "${HF_TOKEN:-}" ]; then export HF_TOKEN; FLL_TOKEN_ARGS=(-e HF_TOKEN); fi
+    FLL_PROGRESS_ARGS=()
+    if [ -f "$REPO_DIR/hf-progress.py" ]; then
+      FLL_PROGRESS_ARGS=(-v "$REPO_DIR/hf-progress.py:/opt/qwen38/hf-progress.py:ro")
     fi
-  done
-  # The loop variable ends in UNIT_NAME on purpose: CI checks every
-  # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist.
-  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
-    if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
-      echo "disabling $TEXT_UNIT_NAME at boot (unit file kept for switching back)"
-      sudo systemctl disable "$TEXT_UNIT_NAME"
+    # In the lane's own image, as the other vLLM lanes fetch theirs; --init so that a cockpit job
+    # stopped past its timeout stops this too. ckpt-fetch.py is the one fetch of every lane's
+    # checkpoint (it says why).
+    docker run --rm --init --network host --user "$(id -u):$(id -g)" --entrypoint python3 \
+      -e HF_HOME=/hf -e HF_HUB_DOWNLOAD_TIMEOUT=30 -e HF_HUB_DISABLE_XET=1 \
+      -e HF_HUB_DISABLE_PROGRESS_BARS="$DL_NO_BARS" \
+      "${FLL_TOKEN_ARGS[@]}" "${FLL_PROGRESS_ARGS[@]}" \
+      -v "$REPO_DIR/ckpt-fetch.py:/opt/qwen38/ckpt-fetch.py:ro" \
+      -v "$FLL_HF":/hf "$FLASH_LOCAL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_REV" --offline-first \
+      --need-gb "$FLASH_LOCAL_GB" --free-gb "$(dl_free_gb "$FLL_HF")" \
+      || die "the Qwen3.8 Flash-Next FP4-Local checkpoint could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
+    fetched "$FLASH_LOCAL_REPO @ ${FLASH_LOCAL_REV:0:12}"
+    # its chat template, its n-gram table where the engine reads it, and its unit for this checkpoint
+    HF_CACHE="$FLL_HF" bash "$REPO_DIR/install-flash-local.sh" --stage "$FLL_STAGE" \
+      || { rm -f "$FLL_STAGE"; die "the Qwen3.8 Flash-Next FP4-Local unit could not be prepared (the lines above say why)"; }
+    FLL_REWRITTEN=""
+    if ! cmp -s "$FLL_STAGE" "$FLASH_LOCAL_UNIT"; then
+      diff "$FLL_STAGE" "$FLASH_LOCAL_UNIT" || true   # show exactly what changes
+      sudo install -m 644 "$FLL_STAGE" "$FLASH_LOCAL_UNIT"
+      FLL_REWRITTEN=1
     fi
-  done
-  sudo systemctl enable "$FLASH_LOCAL_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$FLASH_LOCAL_UNIT_NAME"
-  sudo systemctl daemon-reload
-  RUNNING=""
-  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
-    systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
-  done
-  printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_UNIT_NAME"
-  if [ -n "$RUNNING" ]; then
-    echo "Effective after:  sudo systemctl stop $RUNNING && sudo systemctl start $FLASH_LOCAL_UNIT_NAME   (or next reboot)"
-  elif systemctl is-active --quiet "$FLASH_LOCAL_UNIT_NAME" 2>/dev/null; then
-    if [ -n "$FLL_REWRITTEN" ]; then
-      echo "Effective after:  sudo systemctl restart $FLASH_LOCAL_UNIT_NAME   (it serves the previous unit until then)"
+    rm -f "$FLL_STAGE"
+    # Which lane this box served at boot, written down before it is disabled: removing this lane
+    # later gives the boot back to it (its installer's --uninstall).
+    for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service; do
+      if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
+        text_lane_note "$TEXT_UNIT_NAME"; break   # both enabled: the 27B, as install.sh follows it
+      fi
+    done
+    # The loop variable ends in UNIT_NAME on purpose: CI checks every
+    # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist.
+    for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
+      if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
+        echo "disabling $TEXT_UNIT_NAME at boot (unit file kept for switching back)"
+        sudo systemctl disable "$TEXT_UNIT_NAME"
+      fi
+    done
+    sudo systemctl enable "$FLASH_LOCAL_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$FLASH_LOCAL_UNIT_NAME"
+    sudo systemctl daemon-reload
+    RUNNING=""
+    for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-ornith-122b.service qwen38-flash-unsloth.service; do
+      systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
+    done
+    printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_UNIT_NAME"
+    if [ -n "$RUNNING" ]; then
+      echo "Effective after:  sudo systemctl stop $RUNNING && sudo systemctl start $FLASH_LOCAL_UNIT_NAME   (or next reboot)"
+    elif systemctl is-active --quiet "$FLASH_LOCAL_UNIT_NAME" 2>/dev/null; then
+      if [ -n "$FLL_REWRITTEN" ]; then
+        echo "Effective after:  sudo systemctl restart $FLASH_LOCAL_UNIT_NAME   (it serves the previous unit until then)"
+      else
+        echo "Its unit already named this checkpoint. Started before it did, the lane serves what it loaded: sudo systemctl restart $FLASH_LOCAL_UNIT_NAME"
+      fi
     else
-      echo "Its unit already named this checkpoint. Started before it did, the lane serves what it loaded: sudo systemctl restart $FLASH_LOCAL_UNIT_NAME"
+      echo "Effective after:  sudo systemctl start $FLASH_LOCAL_UNIT_NAME   (or next reboot; ready in about 6 min, 17 at its first boot)"
     fi
-  else
-    echo "Effective after:  sudo systemctl start $FLASH_LOCAL_UNIT_NAME   (or next reboot; ready in about 6 min, 17 at its first boot)"
   fi
   # opencode follows the lane, as on a text switch: the lane's provider becomes the default of the
   # generated config and of the one opencode reads, and the server that reads them restarts when
@@ -610,6 +623,7 @@ if [ "$CHOICE" = "flash-local" ]; then
     fi
   fi
   echo "Clients reach it through the proxy on :30001 with the box's key, as model qwen3.8-flash-next-fp4."
+  [ "$CLIENTS_ONLY" -eq 0 ] || { echo "--clients: the clients of $FLASH_LOCAL_UNIT_NAME, for the window of the unit in place; nothing else was changed"; exit 0; }
   echo "Switch back:      ./switch-model.sh flash   (or any other target)"
   exit 0
 fi
@@ -758,65 +772,68 @@ FLASH_UNSLOTH_UNIT_NAME="qwen38-flash-unsloth.service"
 FLU_STAGE="$CONFIG_DIR/qwen38-flash-unsloth.service.switch-stage"
 if [ "$CHOICE" = "flash-unsloth" ]; then
   [ -f "$FLASH_UNSLOTH_UNIT" ] || die "the Qwen3.8 Flash-Next Unsloth GGUF lane is not installed on this box (no $FLASH_UNSLOTH_UNIT). Install it once: ./install.sh --with-flash-unsloth (about 117 GB)"
-  # The model, its pinned revision and the image, from the lane's installer, the one place they are declared.
-  eval "$(grep -E '^FLASH_UNSLOTH_(REPO|REV|IMAGE)=' "$REPO_DIR/install-flash-unsloth.sh" || true)"
-  for _v in FLASH_UNSLOTH_REPO FLASH_UNSLOTH_REV FLASH_UNSLOTH_IMAGE; do
-    eval "[ -n \"\${$_v:-}\" ]" || die "install-flash-unsloth.sh no longer defines $_v (repo layout changed?)"
-  done
-  unset _v
-  FLU_HF="$(unit_hf_cache "$FLASH_UNSLOTH_UNIT")"
-  FLU_HF="${FLU_HF:-$HF_CACHE}"
-  printf '\n\033[1;36m── Verifying %s @ %s and its draft in the cache (resumable)\033[0m\n' "$FLASH_UNSLOTH_REPO" "${FLASH_UNSLOTH_REV:0:12}"
-  # As the user, by the lane's installer: the files pinned there, the room checked before a byte comes, the token
-  # read from the environment (gguf-fetch.py), so it is in no argv. The image is not needed for it, so a --fetch
-  # of the Library works before the lane's first Load pulled it.
-  HF_CACHE="$FLU_HF" bash "$REPO_DIR/install-flash-unsloth.sh" --fetch \
-    || die "the Qwen3.8 Flash-Next Unsloth GGUF files could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
-  fetched "$FLASH_UNSLOTH_REPO @ ${FLASH_UNSLOTH_REV:0:12}"
-  docker image inspect "$FLASH_UNSLOTH_IMAGE" >/dev/null 2>&1 \
-    || die "the Qwen3.8 Flash-Next Unsloth GGUF lane's image (${FLASH_UNSLOTH_IMAGE:0:40}...) is missing: ./prepare-lane.sh flash-unsloth pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
-  # its chat template, and its unit for these files
-  HF_CACHE="$FLU_HF" bash "$REPO_DIR/install-flash-unsloth.sh" --stage "$FLU_STAGE" \
-    || { rm -f "$FLU_STAGE"; die "the Qwen3.8 Flash-Next Unsloth GGUF unit could not be prepared (the lines above say why)"; }
-  FLU_REWRITTEN=""
-  if ! cmp -s "$FLU_STAGE" "$FLASH_UNSLOTH_UNIT"; then
-    diff "$FLU_STAGE" "$FLASH_UNSLOTH_UNIT" || true   # show exactly what changes
-    sudo install -m 644 "$FLU_STAGE" "$FLASH_UNSLOTH_UNIT"
-    FLU_REWRITTEN=1
-  fi
-  rm -f "$FLU_STAGE"
-  # Which lane this box served at boot, written down before it is disabled: removing this lane
-  # later gives the boot back to it (its installer's --uninstall).
-  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service; do
-    if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
-      text_lane_note "$TEXT_UNIT_NAME"; break   # both enabled: the 27B, as install.sh follows it
+  # the fetch, the unit and the boot: --clients goes straight to the clients, for the unit in place
+  if [ "$CLIENTS_ONLY" -eq 0 ]; then
+    # The model, its pinned revision and the image, from the lane's installer, the one place they are declared.
+    eval "$(grep -E '^FLASH_UNSLOTH_(REPO|REV|IMAGE)=' "$REPO_DIR/install-flash-unsloth.sh" || true)"
+    for _v in FLASH_UNSLOTH_REPO FLASH_UNSLOTH_REV FLASH_UNSLOTH_IMAGE; do
+      eval "[ -n \"\${$_v:-}\" ]" || die "install-flash-unsloth.sh no longer defines $_v (repo layout changed?)"
+    done
+    unset _v
+    FLU_HF="$(unit_hf_cache "$FLASH_UNSLOTH_UNIT")"
+    FLU_HF="${FLU_HF:-$HF_CACHE}"
+    printf '\n\033[1;36m── Verifying %s @ %s and its draft in the cache (resumable)\033[0m\n' "$FLASH_UNSLOTH_REPO" "${FLASH_UNSLOTH_REV:0:12}"
+    # As the user, by the lane's installer: the files pinned there, the room checked before a byte comes, the token
+    # read from the environment (gguf-fetch.py), so it is in no argv. The image is not needed for it, so a --fetch
+    # of the Library works before the lane's first Load pulled it.
+    HF_CACHE="$FLU_HF" bash "$REPO_DIR/install-flash-unsloth.sh" --fetch \
+      || die "the Qwen3.8 Flash-Next Unsloth GGUF files could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
+    fetched "$FLASH_UNSLOTH_REPO @ ${FLASH_UNSLOTH_REV:0:12}"
+    docker image inspect "$FLASH_UNSLOTH_IMAGE" >/dev/null 2>&1 \
+      || die "the Qwen3.8 Flash-Next Unsloth GGUF lane's image (${FLASH_UNSLOTH_IMAGE:0:40}...) is missing: ./prepare-lane.sh flash-unsloth pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
+    # its chat template, and its unit for these files
+    HF_CACHE="$FLU_HF" bash "$REPO_DIR/install-flash-unsloth.sh" --stage "$FLU_STAGE" \
+      || { rm -f "$FLU_STAGE"; die "the Qwen3.8 Flash-Next Unsloth GGUF unit could not be prepared (the lines above say why)"; }
+    FLU_REWRITTEN=""
+    if ! cmp -s "$FLU_STAGE" "$FLASH_UNSLOTH_UNIT"; then
+      diff "$FLU_STAGE" "$FLASH_UNSLOTH_UNIT" || true   # show exactly what changes
+      sudo install -m 644 "$FLU_STAGE" "$FLASH_UNSLOTH_UNIT"
+      FLU_REWRITTEN=1
     fi
-  done
-  # The loop variable ends in UNIT_NAME on purpose: CI checks every
-  # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist.
-  for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
-    if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
-      echo "disabling $TEXT_UNIT_NAME at boot (unit file kept for switching back)"
-      sudo systemctl disable "$TEXT_UNIT_NAME"
-    fi
-  done
-  sudo systemctl enable "$FLASH_UNSLOTH_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$FLASH_UNSLOTH_UNIT_NAME"
-  sudo systemctl daemon-reload
-  RUNNING=""
-  for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
-    systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
-  done
-  printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$FLASH_UNSLOTH_REPO" "$FLASH_UNSLOTH_UNIT_NAME"
-  if [ -n "$RUNNING" ]; then
-    echo "Effective after:  sudo systemctl stop $RUNNING && sudo systemctl start $FLASH_UNSLOTH_UNIT_NAME   (or next reboot)"
-  elif systemctl is-active --quiet "$FLASH_UNSLOTH_UNIT_NAME" 2>/dev/null; then
-    if [ -n "$FLU_REWRITTEN" ]; then
-      echo "Effective after:  sudo systemctl restart $FLASH_UNSLOTH_UNIT_NAME   (it serves the previous unit until then)"
+    rm -f "$FLU_STAGE"
+    # Which lane this box served at boot, written down before it is disabled: removing this lane
+    # later gives the boot back to it (its installer's --uninstall).
+    for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service; do
+      if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
+        text_lane_note "$TEXT_UNIT_NAME"; break   # both enabled: the 27B, as install.sh follows it
+      fi
+    done
+    # The loop variable ends in UNIT_NAME on purpose: CI checks every
+    # `sudo systemctl <verb> "$..UNIT_NAME"` against the cockpit's sudoers allowlist.
+    for TEXT_UNIT_NAME in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+      if systemctl is-enabled --quiet "$TEXT_UNIT_NAME" 2>/dev/null; then
+        echo "disabling $TEXT_UNIT_NAME at boot (unit file kept for switching back)"
+        sudo systemctl disable "$TEXT_UNIT_NAME"
+      fi
+    done
+    sudo systemctl enable "$FLASH_UNSLOTH_UNIT_NAME" >/dev/null 2>&1 || sudo systemctl enable "$FLASH_UNSLOTH_UNIT_NAME"
+    sudo systemctl daemon-reload
+    RUNNING=""
+    for u in qwen38-sglang.service qwen38-flash.service qwen38-image.service qwen38-video.service qwen38-kolibri.service qwen38-nemotron.service qwen38-nemotron-super.service qwen38-flash-local.service qwen38-ornith-122b.service; do
+      systemctl is-active --quiet "$u" 2>/dev/null && RUNNING="$u"
+    done
+    printf '\n\033[1;32mSwitch queued: %s (%s)\033[0m\n' "$FLASH_UNSLOTH_REPO" "$FLASH_UNSLOTH_UNIT_NAME"
+    if [ -n "$RUNNING" ]; then
+      echo "Effective after:  sudo systemctl stop $RUNNING && sudo systemctl start $FLASH_UNSLOTH_UNIT_NAME   (or next reboot)"
+    elif systemctl is-active --quiet "$FLASH_UNSLOTH_UNIT_NAME" 2>/dev/null; then
+      if [ -n "$FLU_REWRITTEN" ]; then
+        echo "Effective after:  sudo systemctl restart $FLASH_UNSLOTH_UNIT_NAME   (it serves the previous unit until then)"
+      else
+        echo "Its unit already named these files. Started before it did, the lane serves what it loaded: sudo systemctl restart $FLASH_UNSLOTH_UNIT_NAME"
+      fi
     else
-      echo "Its unit already named these files. Started before it did, the lane serves what it loaded: sudo systemctl restart $FLASH_UNSLOTH_UNIT_NAME"
+      echo "Effective after:  sudo systemctl start $FLASH_UNSLOTH_UNIT_NAME   (or next reboot; ready in about 4 to 7 min)"
     fi
-  else
-    echo "Effective after:  sudo systemctl start $FLASH_UNSLOTH_UNIT_NAME   (or next reboot; ready in about 4 to 7 min)"
   fi
   # opencode follows the lane, as on a text switch: the lane's provider becomes the default of the
   # generated config and of the one opencode reads, and the server that reads them restarts when
@@ -864,6 +881,7 @@ if [ "$CHOICE" = "flash-unsloth" ]; then
     fi
   fi
   echo "Clients reach it through the proxy on :30001 with the box's key, as model qwen3.8-flash-next-unsloth."
+  [ "$CLIENTS_ONLY" -eq 0 ] || { echo "--clients: the clients of $FLASH_UNSLOTH_UNIT_NAME, for the window of the unit in place; nothing else was changed"; exit 0; }
   echo "Switch back:      ./switch-model.sh flash   (or any other target)"
   exit 0
 fi
