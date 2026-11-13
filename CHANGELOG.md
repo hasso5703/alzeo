@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.48.0 (2026-11-12): a tenth lane, the first on llama.cpp: Qwen3.8 Flash-Next in Unsloth's GGUF, with n-grams and a DFlash2 draft
+## v1.48.0 (2026-11-13): a tenth lane, the first on llama.cpp: Qwen3.8 Flash-Next in Unsloth's GGUF, with n-grams and a DFlash2 draft
 
 **The lane.** `install-flash-unsloth.sh` serves Unsloth's dynamic 4-bit GGUF of Qwen3.8-Flash-Next
 (`unsloth/Qwen3.8-Flash-Next-GGUF`, UD-Q4_K_XL: 76.9 GiB of weights) with llama.cpp's own server, from the image the
@@ -117,6 +117,32 @@ the lane already has (it verifies the lane's files and restarts nothing), then s
 starts nothing adds nothing, and the other lanes' Loads are as they were. The page's tests cover each state the Load
 meets, and fail on the code before. `./install.sh` now says, as switch-model.sh does, when a config edited by hand
 refuses the pair of either lane: it kept the old pair without a word.
+
+**Every lane, before the push.** The reference box was installed from this very commit by the update path (`./install.sh`
+from its clone), then every lane ran, one by one, as the cockpit loads it: the eight text lanes, each with the eight
+real clients (Claude Code, opencode, Hermes, pi, the Anthropic SDK, fetch from Node and Bun, LiteLLM), then the image
+lane and the video lane, each with a real generation from its view of the cockpit (an image of 1,024 x 1,024 in 40 s,
+4.5 s of video at 864 x 480 in 160 s with the Turbo adapter), in 1 h 35 min. 63 of the 64 text cells answered at the
+first try. The 64th was pi on this lane: asked for the number in a file that holds 7351, it read the file, its
+reasoning ended on 7351, and its answer was "7" (the engine drew that token, then the end of the answer, 14 tokens in
+all, at the model card's sampling: temperature 1.0, top-k 20, top-p 0.95, which the GGUF carries and llama-server
+applies when a client sends none); its four replays answered 7351. A draw or a defect of the lane? The same task ran
+100 times on FP4-Local, the same model served by vLLM at the same sampling, and 100 times on this lane: pi missed the
+number 5 times in 100 on FP4-Local and 8 times in 100 here, with the same kinds of answer (a number cut short, "Okay",
+a reply that says it has no tool to read files, an instruction it says it was given and was not). The engines served
+one request at a time and nothing but pi's: those answers are the model's own, drawn at that temperature with pi's
+reasoning set to off (the reference box's own pi settings), and not a request seeing another one's context. Nor is it
+the draft: on a test server of this lane's image and options, with no proxy between, pi missed 3 times in 100 with the
+lane's draft and 6 times in 100 with none, a "7" among them. Nothing here is this lane's.
+
+**After the push.** GitHub's CI of the push measured `dashboard/registry.py` at 87 % of coverage, under its 88 %
+floor: the lines of the GGUF checkpoint check were taken only by tests that read the reference box's own Hugging Face
+cache, which GitHub's runners do not have. A test of that check in a temporary folder followed (registry.py from 84 % to
+89 % by its own tests), through the same gate (the full local CI, 53 steps, none skipped), and GitHub's CI of `main`
+then passed: 95 steps, none skipped, in 10 min 42 s. The reference box then updated itself with the README's one-liner
+from its clone, as a user does: v1.48.0 installed in 1 min 32 s, the FP4-Local lane kept as the lane that serves, and the
+cockpit's one banner the one it already showed (two tool calls of the afternoon, refused by their client, that named a
+cloud metadata address).
 
 ## v1.47.0 (2026-11-12): a GPU clock cap in the cockpit's Machine view: about the same tokens per second for fewer watts and degrees
 
