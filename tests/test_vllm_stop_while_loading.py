@@ -15,7 +15,6 @@ line's end joins it to the next, $$ is a $, a leading - ignores the command's fa
 a docker that stands in for the engine: its run loads until it is stopped or crashes, then exits 1 as
 vLLM did, and its stop ends the run and waits for it, as docker stop does.
 """
-import os
 import pathlib
 import shlex
 import shutil

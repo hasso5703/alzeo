@@ -52,7 +52,7 @@ CALLS = {
                             '      --need-gb "$NEM_ASK" --free-gb "$(dl_free_gb "$NEM_HF")"'),
     "switch-model.sh, the Qwen3.8 Flash-Next FP4-Local lane":
         ("switch-model.sh", '"$FLASH_LOCAL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_REV" --offline-first \\\n'
-                            '    --need-gb "$FLASH_LOCAL_GB" --free-gb "$(dl_free_gb "$FLL_HF")"'),
+                            '      --need-gb "$FLASH_LOCAL_GB" --free-gb "$(dl_free_gb "$FLL_HF")"'),
     "switch-model.sh, the Ornith lane":
         ("switch-model.sh", '"$FLASH_LOCAL_IMAGE" /opt/qwen38/ckpt-fetch.py "$ORNITH_122B_REPO" "$ORNITH_122B_REV" --offline-first \\\n'
                             '    --need-gb "$ORNITH_122B_GB" --free-gb "$(dl_free_gb "$ORN_HF")"'),
