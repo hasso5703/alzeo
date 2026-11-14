@@ -41,6 +41,22 @@ says it runs the requests they set. Four mutants of the pair's decision still fa
 **What an update does.** The five vLLM units are written again: one that serves keeps running, its card says an update is
 owed, and its next Load restarts it on the new unit. The cockpit restarts. The proxy is unchanged and does not.
 
+**Every lane, before the push.** The reference box was installed from this very commit by the update path, then every
+lane ran, one by one, as the cockpit loads it: the eight text lanes, each with the eight real clients (Claude Code,
+opencode, Hermes, pi, the Anthropic SDK, fetch from Node and Bun, LiteLLM), 64 cells of 64 at the first try, then the
+image lane (an image of 1,024 x 1,024 in 40 s) and the video lane. The box switched itself off during that run, at
+05:26, after five and a half hours of heavy loads back to back (its chip had reached 98 °C eight minutes before): the
+video ran again once it was back, 4.5 s of video at 864 x 480 in 170 s. Since then a run of heavy loads on the reference box
+waits for the chip to cool under 70 °C before each one. On the same install, through the cockpit's own actions: FP4-Local
+stopped 30 s into its start ended `inactive` with `Result=success`, its runtime directory gone; its engine killed inside
+the container while it loaded ended `Failed with result 'exit-code'` and `Restart=` started it again; its `--clients`
+action left opencode's default model, its compaction and the boot as they were; the three themes, each picked in the
+settings and read again on a new page, at a desk's size and on a phone, with no JavaScript error.
+
+**After the push.** GitHub's CI of `main` passed: 95 steps, none skipped, in 11 min. The reference box then updated
+itself with the README's one-liner from its clone, as a user does: v1.48.1 installed in 5 min 25 s, nothing of the box's
+own differing from the recommended state, the 27B lane serving, and the cockpit's one banner the one it already showed.
+
 ## v1.48.0 (2026-11-13): a tenth lane, the first on llama.cpp: Qwen3.8 Flash-Next in Unsloth's GGUF, with n-grams and a DFlash2 draft
 
 **The lane.** `install-flash-unsloth.sh` serves Unsloth's dynamic 4-bit GGUF of Qwen3.8-Flash-Next
